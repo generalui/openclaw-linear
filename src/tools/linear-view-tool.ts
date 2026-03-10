@@ -4,17 +4,14 @@ import { jsonResult, stringEnum, formatErrorMessage } from "openclaw/plugin-sdk"
 import { graphql } from "../linear-api.js";
 
 const Params = Type.Object({
-  action: stringEnum(
-    ["list", "get", "create", "update", "delete"] as const,
-    {
-      description:
-        "list: list all custom views. " +
-        "get: get a specific view by ID. " +
-        "create: create a new custom view. " +
-        "update: update an existing view. " +
-        "delete: delete a view.",
-    },
-  ),
+  action: stringEnum(["list", "get", "create", "update", "delete"] as const, {
+    description:
+      "list: show all custom views. " +
+      "get: get a specific view by id. " +
+      "create: create a new view. " +
+      "update: update an existing view. " +
+      "delete: delete a view.",
+  }),
   viewId: Type.Optional(
     Type.String({
       description: "View ID. Required for get, update, delete.",
@@ -23,157 +20,163 @@ const Params = Type.Object({
   name: Type.Optional(
     Type.String({ description: "View name. Required for create." }),
   ),
-  description: Type.Optional(
-    Type.String({ description: "View description." }),
-  ),
-  icon: Type.Optional(
-    Type.String({ description: "View icon name." }),
-  ),
-  color: Type.Optional(
-    Type.String({ description: "View color (hex string, e.g. '#FF0000')." }),
+  description: Type.Optional(Type.String({ description: "View description." })),
+  icon: Type.Optional(Type.String({ description: "View icon." })),
+  color: Type.Optional(Type.String({ description: "View color." })),
+  filterData: Type.Optional(
+    Type.String({
+      description:
+        "JSON string of filter data for the view (Linear filter format).",
+    }),
   ),
   shared: Type.Optional(
-    Type.Boolean({ description: "Whether the view is shared with the team." }),
-  ),
-  filterData: Type.Optional(
-    Type.Unknown({
-      description: "Filter data object for the view (Linear FilterInput JSON).",
+    Type.Boolean({
+      description: "Whether the view is shared with the team.",
     }),
   ),
 });
 
 type Params = Static<typeof Params>;
 
-const VIEW_FIELDS = `
-  id
-  name
-  description
-  icon
-  color
-  shared
-  filterData
-  creator { name }
-  updatedAt
+const LIST_VIEWS_QUERY = `
+  query ListCustomViews {
+    customViews {
+      nodes {
+        id
+        name
+        description
+        icon
+        color
+        shared
+        creator { name email }
+        updatedAt
+      }
+    }
+  }
+`;
+
+const GET_VIEW_QUERY = `
+  query GetCustomView($id: String!) {
+    customView(id: $id) {
+      id
+      name
+      description
+      icon
+      color
+      shared
+      creator { name email }
+      updatedAt
+    }
+  }
+`;
+
+const CREATE_VIEW_MUTATION = `
+  mutation CreateCustomView($input: CustomViewCreateInput!) {
+    customViewCreate(input: $input) {
+      success
+      customView { id name }
+    }
+  }
+`;
+
+const UPDATE_VIEW_MUTATION = `
+  mutation UpdateCustomView($id: String!, $input: CustomViewUpdateInput!) {
+    customViewUpdate(id: $id, input: $input) {
+      success
+      customView { id name }
+    }
+  }
+`;
+
+const DELETE_VIEW_MUTATION = `
+  mutation DeleteCustomView($id: String!) {
+    customViewDelete(id: $id) {
+      success
+    }
+  }
 `;
 
 export function createViewTool(): AnyAgentTool {
   return {
     name: "linear_view",
+    label: "Linear View",
     description:
       "Manage Linear custom views. Actions: list, get, create, update, delete.",
     parameters: Params,
-    async execute(params: Params) {
+    async execute(_toolCallId: string, params: Params) {
+      const {
+        action,
+        viewId,
+        name,
+        description,
+        icon,
+        color,
+        filterData,
+        shared,
+      } = params;
+
       try {
-        switch (params.action) {
-          case "list": {
-            const data = await graphql<{
-              customViews: { nodes: unknown[] };
-            }>(
-              `query {
-                customViews {
-                  nodes {
-                    ${VIEW_FIELDS}
-                  }
-                }
-              }`,
-            );
-            return jsonResult(data.customViews.nodes);
-          }
-
-          case "get": {
-            if (!params.viewId) {
-              throw new Error("viewId is required for get");
-            }
-            const data = await graphql<{
-              customView: unknown;
-            }>(
-              `query($id: String!) {
-                customView(id: $id) {
-                  ${VIEW_FIELDS}
-                }
-              }`,
-              { id: params.viewId },
-            );
-            return jsonResult(data.customView);
-          }
-
-          case "create": {
-            if (!params.name) {
-              throw new Error("name is required for create");
-            }
-            const input: Record<string, unknown> = { name: params.name };
-            if (params.description !== undefined) input.description = params.description;
-            if (params.icon !== undefined) input.icon = params.icon;
-            if (params.color !== undefined) input.color = params.color;
-            if (params.shared !== undefined) input.shared = params.shared;
-            if (params.filterData !== undefined) input.filterData = params.filterData;
-
-            const data = await graphql<{
-              customViewCreate: { success: boolean; customView: unknown };
-            }>(
-              `mutation($input: CustomViewCreateInput!) {
-                customViewCreate(input: $input) {
-                  success
-                  customView {
-                    ${VIEW_FIELDS}
-                  }
-                }
-              }`,
-              { input },
-            );
-            return jsonResult(data.customViewCreate);
-          }
-
-          case "update": {
-            if (!params.viewId) {
-              throw new Error("viewId is required for update");
-            }
-            const input: Record<string, unknown> = {};
-            if (params.name !== undefined) input.name = params.name;
-            if (params.description !== undefined) input.description = params.description;
-            if (params.icon !== undefined) input.icon = params.icon;
-            if (params.color !== undefined) input.color = params.color;
-            if (params.shared !== undefined) input.shared = params.shared;
-            if (params.filterData !== undefined) input.filterData = params.filterData;
-
-            const data = await graphql<{
-              customViewUpdate: { success: boolean; customView: unknown };
-            }>(
-              `mutation($id: String!, $input: CustomViewUpdateInput!) {
-                customViewUpdate(id: $id, input: $input) {
-                  success
-                  customView {
-                    ${VIEW_FIELDS}
-                  }
-                }
-              }`,
-              { id: params.viewId, input },
-            );
-            return jsonResult(data.customViewUpdate);
-          }
-
-          case "delete": {
-            if (!params.viewId) {
-              throw new Error("viewId is required for delete");
-            }
-            const data = await graphql<{
-              customViewDelete: { success: boolean };
-            }>(
-              `mutation($id: String!) {
-                customViewDelete(id: $id) {
-                  success
-                }
-              }`,
-              { id: params.viewId },
-            );
-            return jsonResult(data.customViewDelete);
-          }
-
-          default:
-            throw new Error(`Unknown action: ${(params as Params).action}`);
+        if (action === "list") {
+          const data = await graphql<{
+            customViews: { nodes: unknown[] };
+          }>(LIST_VIEWS_QUERY);
+          const views = data?.customViews?.nodes ?? [];
+          return jsonResult({ count: views.length, views });
         }
+
+        if (action === "get") {
+          if (!viewId) throw new Error("viewId is required for get");
+          const data = await graphql<{ customView: unknown }>(GET_VIEW_QUERY, {
+            id: viewId,
+          });
+          return jsonResult(data?.customView ?? null);
+        }
+
+        if (action === "create") {
+          if (!name) throw new Error("name is required for create");
+          const input: Record<string, unknown> = { name };
+          if (description !== undefined) input.description = description;
+          if (icon !== undefined) input.icon = icon;
+          if (color !== undefined) input.color = color;
+          if (filterData !== undefined)
+            input.filterData = JSON.parse(filterData);
+          if (shared !== undefined) input.shared = shared;
+          const data = await graphql<{ customViewCreate: unknown }>(
+            CREATE_VIEW_MUTATION,
+            { input },
+          );
+          return jsonResult(data?.customViewCreate ?? null);
+        }
+
+        if (action === "update") {
+          if (!viewId) throw new Error("viewId is required for update");
+          const input: Record<string, unknown> = {};
+          if (name !== undefined) input.name = name;
+          if (description !== undefined) input.description = description;
+          if (icon !== undefined) input.icon = icon;
+          if (color !== undefined) input.color = color;
+          if (filterData !== undefined)
+            input.filterData = JSON.parse(filterData);
+          if (shared !== undefined) input.shared = shared;
+          const data = await graphql<{ customViewUpdate: unknown }>(
+            UPDATE_VIEW_MUTATION,
+            { id: viewId, input },
+          );
+          return jsonResult(data?.customViewUpdate ?? null);
+        }
+
+        if (action === "delete") {
+          if (!viewId) throw new Error("viewId is required for delete");
+          const data = await graphql<{ customViewDelete: unknown }>(
+            DELETE_VIEW_MUTATION,
+            { id: viewId },
+          );
+          return jsonResult(data?.customViewDelete ?? null);
+        }
+
+        throw new Error(`Unknown action: ${action}`);
       } catch (err) {
-        return { error: formatErrorMessage(err) };
+        return jsonResult({ error: formatErrorMessage(err) });
       }
     },
   };

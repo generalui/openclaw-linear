@@ -309,7 +309,8 @@ export function activate(api: OpenClawPluginApi): void {
     path: "/linear",
     handler,
     auth: "plugin",
-  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any);
 
   api.logger.info(
     `Linear webhook handler registered at /linear (debounce: ${debounceMs}ms)`,
