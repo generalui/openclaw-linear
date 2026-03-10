@@ -10,6 +10,7 @@ import { createCommentTool } from "./tools/linear-comment-tool.js";
 import { createTeamTool } from "./tools/linear-team-tool.js";
 import { createProjectTool } from "./tools/linear-project-tool.js";
 import { createRelationTool } from "./tools/linear-relation-tool.js";
+import { createViewTool } from "./tools/linear-view-tool.js";
 
 const CHANNEL_ID = "linear";
 const DEFAULT_DEBOUNCE_MS = 30_000;
@@ -163,7 +164,8 @@ export function activate(api: OpenClawPluginApi): void {
   const core = api.runtime;
   const cfg = api.config;
 
-  const queuePath = api.resolvePath("queue/inbox.jsonl");
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || "~/.openclaw";
+  const queuePath = api.resolvePath(`${stateDir}/extensions/openclaw-linear/queue/inbox.jsonl`);
   const queue = new InboxQueue(queuePath);
 
   // Recover any stale in_progress items from a previous crash
@@ -183,6 +185,7 @@ export function activate(api: OpenClawPluginApi): void {
   api.registerTool(createTeamTool());
   api.registerTool(createProjectTool());
   api.registerTool(createRelationTool());
+  api.registerTool(createViewTool());
 
   // Auto-wake: after a "complete" action, dispatch a fresh session if items remain
   api.on("after_tool_call", async (event) => {
@@ -303,12 +306,13 @@ export function activate(api: OpenClawPluginApi): void {
   });
 
   api.registerHttpRoute({
-    path: "/hooks/linear",
+    path: "/linear",
     handler,
+    auth: "plugin",
   });
 
   api.logger.info(
-    `Linear webhook handler registered at /hooks/linear (debounce: ${debounceMs}ms)`,
+    `Linear webhook handler registered at /linear (debounce: ${debounceMs}ms)`,
   );
 }
 

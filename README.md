@@ -74,7 +74,7 @@ plugins:
                                 ▼
                   ┌───────────────────────────┐
                   │      Webhook Handler      │
-                  │  HMAC verify · dedup (10m) │
+                  │  HMAC verify · dedup (10m)│
                   └─────────────┬─────────────┘
                                 │
                                 ▼
