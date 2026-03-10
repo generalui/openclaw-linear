@@ -163,7 +163,7 @@ export function activate(api: OpenClawPluginApi): void {
   const core = api.runtime;
   const cfg = api.config;
 
-  const queuePath = api.resolvePath("queue/inbox.jsonl");
+  const queuePath = api.resolvePath("~/.openclaw/extensions/openclaw-linear/queue/inbox.jsonl");
   const queue = new InboxQueue(queuePath);
 
   // Recover any stale in_progress items from a previous crash
@@ -303,12 +303,13 @@ export function activate(api: OpenClawPluginApi): void {
   });
 
   api.registerHttpRoute({
-    path: "/hooks/linear",
+    path: "/linear",
     handler,
+    auth: "plugin",
   });
 
   api.logger.info(
-    `Linear webhook handler registered at /hooks/linear (debounce: ${debounceMs}ms)`,
+    `Linear webhook handler registered at /linear (debounce: ${debounceMs}ms)`,
   );
 }
 
