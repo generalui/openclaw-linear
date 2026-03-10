@@ -10,6 +10,7 @@ import { createCommentTool } from "./tools/linear-comment-tool.js";
 import { createTeamTool } from "./tools/linear-team-tool.js";
 import { createProjectTool } from "./tools/linear-project-tool.js";
 import { createRelationTool } from "./tools/linear-relation-tool.js";
+import { createViewTool } from "./tools/linear-view-tool.js";
 
 const CHANNEL_ID = "linear";
 const DEFAULT_DEBOUNCE_MS = 30_000;
@@ -183,6 +184,7 @@ export function activate(api: OpenClawPluginApi): void {
   api.registerTool(createTeamTool());
   api.registerTool(createProjectTool());
   api.registerTool(createRelationTool());
+  api.registerTool(createViewTool());
 
   // Auto-wake: after a "complete" action, dispatch a fresh session if items remain
   api.on("after_tool_call", async (event) => {
