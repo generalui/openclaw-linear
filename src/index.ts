@@ -164,7 +164,8 @@ export function activate(api: OpenClawPluginApi): void {
   const core = api.runtime;
   const cfg = api.config;
 
-  const queuePath = api.resolvePath("~/.openclaw/extensions/openclaw-linear/queue/inbox.jsonl");
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || "~/.openclaw";
+  const queuePath = api.resolvePath(`${stateDir}/extensions/openclaw-linear/queue/inbox.jsonl`);
   const queue = new InboxQueue(queuePath);
 
   // Recover any stale in_progress items from a previous crash
