@@ -383,6 +383,25 @@ describe('event-router', () => {
       })
     })
 
+    it('default: triage → no action (ignore)', () => {
+      const config = makeConfig()
+      const route = createEventRouter(config)
+
+      const event: LinearWebhookPayload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          id: 'issue-triage',
+          assigneeId: 'user-1',
+          state: { type: 'triage', name: 'Triage' },
+        },
+        updatedFrom: { stateId: 'state-old' },
+        createdAt: new Date().toISOString(),
+      }
+
+      expect(route(event)).toEqual([])
+    })
+
     it('default: started → no action (ignore)', () => {
       const config = makeConfig()
       const route = createEventRouter(config)

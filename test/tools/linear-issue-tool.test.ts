@@ -193,6 +193,139 @@ describe('linear_issue tool', () => {
       const data = parse(result)
       expect(data.error).toContain('issueId is required')
     })
+
+    it('appends to existing description when appendDescription is true', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedGraphql
+        // First call: fetch team + existing description
+        .mockResolvedValueOnce({ issue: { team: { id: 'team-1' }, description: 'Original content.' } })
+        // Second call: the update mutation
+        .mockResolvedValueOnce({
+          issueUpdate: {
+            success: true,
+            issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' },
+          },
+        })
+
+      const tool = createIssueTool()
+      const result = await tool.execute('call-1', {
+        action: 'update',
+        issueId: 'ENG-42',
+        description: 'Appended note.',
+        appendDescription: true,
+      })
+      const data = parse(result)
+      expect(data.success).toBe(true)
+
+      // Verify the mutation was called with the concatenated description
+      const mutationCall = mockedGraphql.mock.calls[1] as [string, Record<string, unknown>]
+      const input = mutationCall[1].input as Record<string, string>
+      expect(input.description).toBe('Original content.\n\nAppended note.')
+    })
+
+    it('sets description directly (no append) when appendDescription is false', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedGraphql.mockResolvedValueOnce({
+        issueUpdate: {
+          success: true,
+          issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' },
+        },
+      })
+
+      const tool = createIssueTool()
+      const result = await tool.execute('call-1', {
+        action: 'update',
+        issueId: 'ENG-42',
+        description: 'Replacement description.',
+      })
+      const data = parse(result)
+      expect(data.success).toBe(true)
+
+      // Only one graphql call (no fetch for existing description)
+      expect(mockedGraphql).toHaveBeenCalledOnce()
+      const call = mockedGraphql.mock.calls[0] as [string, Record<string, unknown>]
+      const input = call[1].input as Record<string, string>
+      expect(input.description).toBe('Replacement description.')
+    })
+
+    it('appends to empty description when existing description is absent', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedGraphql
+        .mockResolvedValueOnce({ issue: { team: { id: 'team-1' }, description: undefined } })
+        .mockResolvedValueOnce({
+          issueUpdate: { success: true, issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' } },
+        })
+
+      const tool = createIssueTool()
+      await tool.execute('call-1', {
+        action: 'update',
+        issueId: 'ENG-42',
+        description: 'First note.',
+        appendDescription: true,
+      })
+
+      const mutationCall = mockedGraphql.mock.calls[1] as [string, Record<string, unknown>]
+      const input = mutationCall[1].input as Record<string, string>
+      // No prefix when existing description is empty
+      expect(input.description).toBe('First note.')
+    })
+
+    it('updates labels via resolveLabelIds', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedResolveLabelIds.mockResolvedValue(['label-bug', 'label-feat'])
+      mockedGraphql.mockResolvedValueOnce({ issue: { team: { id: 'team-1' } } }).mockResolvedValueOnce({
+        issueUpdate: { success: true, issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' } },
+      })
+
+      const tool = createIssueTool()
+      await tool.execute('call-1', {
+        action: 'update',
+        issueId: 'ENG-42',
+        labels: ['Bug', 'Feature'],
+      })
+
+      expect(mockedResolveLabelIds).toHaveBeenCalledWith('team-1', ['Bug', 'Feature'])
+
+      const mutationCall = mockedGraphql.mock.calls[1] as [string, Record<string, unknown>]
+      const input = mutationCall[1].input as Record<string, unknown>
+      expect(input.labelIds).toEqual(['label-bug', 'label-feat'])
+    })
+
+    it('clears dueDate when empty string is passed', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedGraphql.mockResolvedValueOnce({
+        issueUpdate: { success: true, issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' } },
+      })
+
+      const tool = createIssueTool()
+      await tool.execute('call-1', {
+        action: 'update',
+        issueId: 'ENG-42',
+        dueDate: '',
+      })
+
+      const call = mockedGraphql.mock.calls[0] as [string, Record<string, unknown>]
+      const input = call[1].input as Record<string, unknown>
+      expect(input.dueDate).toBeNull()
+    })
+
+    it('sets dueDate when a date string is passed', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedGraphql.mockResolvedValueOnce({
+        issueUpdate: { success: true, issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' } },
+      })
+
+      const tool = createIssueTool()
+      await tool.execute('call-1', {
+        action: 'update',
+        issueId: 'ENG-42',
+        dueDate: '2026-03-18',
+      })
+
+      const call = mockedGraphql.mock.calls[0] as [string, Record<string, unknown>]
+      const input = call[1].input as Record<string, unknown>
+      expect(input.dueDate).toBe('2026-03-18')
+    })
   })
 
   describe('delete', () => {
