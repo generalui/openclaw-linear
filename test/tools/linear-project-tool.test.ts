@@ -60,7 +60,7 @@ describe("linear_project tool", () => {
         status: "planned",
       });
 
-      const query = mockedGraphql.mock.calls[0][0] as string;
+      const query = mockedGraphql.mock.calls[0][0];
       expect(query).toContain("status:");
       expect(query).toContain("$status");
       expect(query).toContain("$team");

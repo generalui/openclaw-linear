@@ -22,7 +22,13 @@
     "build": "tsc",
     "clean": "rm -rf dist",
     "prepack": "npm run build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "run-p lint:project lint:markdown",
+    "lint:markdown": "markdownlint-cli2 '**/*.md'",
+    "lint:project": "eslint './src/**/*.ts' './test/**/*.ts' --max-warnings=0 --cache --cache-location .eslintcache",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [
     "openclaw",
@@ -46,8 +52,17 @@
     "openclaw": ">=2026.2.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.0.0",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^10.0.1",
+    "markdownlint-cli2": "^0.17.0",
+    "npm-run-all": "^4.1.5",
     "openclaw": "^2026.2.12",
+    "prettier": "^3.4.2",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.20.0",
     "vitest": "^4.0.18"
   },
   "openclaw": {
