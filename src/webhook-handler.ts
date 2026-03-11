@@ -118,14 +118,16 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       }
 
       event = {
-        action: String(payload.action ?? ''),
-        type: String(payload.type ?? ''),
+        action: typeof payload.action === 'string' ? payload.action : '',
+        type: typeof payload.type === 'string' ? payload.type : '',
         data: (payload.data as Record<string, unknown>) ?? {},
         updatedFrom: (payload.updatedFrom as Record<string, unknown>) ?? undefined,
-        createdAt: String(payload.createdAt ?? ''),
+        createdAt: typeof payload.createdAt === 'string' ? payload.createdAt : '',
       }
 
-      deps.logger.info(`Linear webhook: ${event.action} ${event.type} (${String(event.data.id ?? 'unknown')})`)
+      const eventId =
+        typeof event.data.id === 'string' || typeof event.data.id === 'number' ? String(event.data.id) : 'unknown'
+      deps.logger.info(`Linear webhook: ${event.action} ${event.type} (${eventId})`)
     } catch (err) {
       deps.logger.error(`Webhook parse error: ${formatErrorMessage(err)}`)
       res.writeHead(500)

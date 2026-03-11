@@ -1,6 +1,5 @@
 import { Type, type Static } from '@sinclair/typebox'
-import type { AnyAgentTool } from 'openclaw/plugin-sdk'
-import { jsonResult, stringEnum, formatErrorMessage } from 'openclaw/plugin-sdk'
+import { type AnyAgentTool, jsonResult, stringEnum, formatErrorMessage } from 'openclaw/plugin-sdk'
 import { graphql, resolveIssueId } from '../linear-api.js'
 
 const Params = Type.Object({

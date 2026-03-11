@@ -36,6 +36,11 @@ export const DEFAULT_STATE_ACTIONS: Record<string, StateAction> = {
   canceled: 'remove',
 }
 
+/** Safely convert an unknown value to a string ID. */
+function toId(val: unknown): string {
+  return typeof val === 'string' ? val : typeof val === 'number' ? String(val) : 'unknown'
+}
+
 export function resolveStateAction(
   config: EventRouterConfig,
   stateType: string | undefined,
@@ -111,11 +116,7 @@ function extractMentionsFromProseMirror(node: unknown): string[] {
  * for values or performing a case-insensitive match against known names
  * provided via the optional nameMapping parameter.
  */
-function extractMentionedUserIds(
-  body: string,
-  bodyData: unknown | undefined,
-  agentMapping: Record<string, string>,
-): string[] {
+function extractMentionedUserIds(body: string, bodyData: unknown, agentMapping: Record<string, string>): string[] {
   if (bodyData) {
     const ids = extractMentionsFromProseMirror(bodyData)
     if (ids.length > 0) return [...new Set(ids)]
@@ -152,145 +153,162 @@ function extractMentionedUserIds(
 function resolveIssueLabel(data: Record<string, unknown>): string {
   const identifier = data.identifier as string | undefined
   const title = data.title as string | undefined
-  const id = String(data.id ?? 'unknown')
+  const id = toId(data.id)
 
   const label = identifier ?? id
   return title ? `${label}: ${title}` : label
 }
 
-function handleIssueUpdate(event: LinearWebhookPayload, config: EventRouterConfig): RouterAction[] {
+type IssueActionArgs = {
+  issueId: string
+  issueLabel: string
+  identifier: string
+  issuePriority: number
+}
+
+function resolveIssueActionArgs(data: Record<string, unknown>): IssueActionArgs {
+  const issueId = toId(data.id)
+  const issueLabel = resolveIssueLabel(data)
+  const identifier = (data.identifier as string) ?? issueId
+  const issuePriority = (data.priority as number) ?? 0
+  return { issueId, issueLabel, identifier, issuePriority }
+}
+
+function handleAssigneeChanges(
+  event: LinearWebhookPayload,
+  config: EventRouterConfig,
+  args: IssueActionArgs,
+  actions: RouterAction[],
+): void {
   const updatedFrom = event.updatedFrom ?? {}
+  if (!('assigneeId' in updatedFrom)) return
+
+  const oldAssignee = updatedFrom.assigneeId as string | null | undefined
+  const newAssignee = event.data.assigneeId as string | null | undefined
+
+  if (newAssignee) {
+    const agentId = config.agentMapping[newAssignee]
+    if (agentId) {
+      actions.push({
+        type: 'wake',
+        agentId,
+        event: 'issue.assigned',
+        detail: `Assigned to issue ${args.issueLabel}`,
+        ...args,
+        linearUserId: newAssignee,
+      })
+    } else {
+      config.logger.info(`Unmapped Linear user ${newAssignee} assigned to ${args.issueId}`)
+    }
+  }
+
+  if (oldAssignee && !newAssignee) {
+    const agentId = config.agentMapping[oldAssignee]
+    if (agentId) {
+      actions.push({
+        type: 'notify',
+        agentId,
+        event: 'issue.unassigned',
+        detail: `Unassigned from issue ${args.issueLabel}`,
+        ...args,
+        linearUserId: oldAssignee,
+      })
+    } else {
+      config.logger.info(`Unmapped Linear user ${oldAssignee} unassigned from ${args.issueId}`)
+    }
+  }
+
+  // Reassignment: both old and new assignee present — notify old assignee
+  if (oldAssignee && newAssignee) {
+    const agentId = config.agentMapping[oldAssignee]
+    if (agentId) {
+      actions.push({
+        type: 'notify',
+        agentId,
+        event: 'issue.reassigned',
+        detail: `Reassigned away from issue ${args.issueLabel}`,
+        ...args,
+        linearUserId: oldAssignee,
+      })
+    }
+  }
+}
+
+function handleStateChange(
+  event: LinearWebhookPayload,
+  config: EventRouterConfig,
+  args: IssueActionArgs,
+  actions: RouterAction[],
+): void {
+  const updatedFrom = event.updatedFrom ?? {}
+  if (!('stateId' in updatedFrom)) return
+
+  const state = event.data.state as Record<string, unknown> | undefined
+  const stateType = state?.type as string | undefined
+  const stateName = state?.name as string | undefined
+  const stateAction = resolveStateAction(config, stateType, stateName)
+
+  if (stateAction !== 'remove' && stateAction !== 'add') return
+
+  const assigneeId = event.data.assigneeId as string | undefined
+  if (!assigneeId) return
+
+  const agentId = config.agentMapping[assigneeId]
+  if (!agentId) return
+
+  const stateSuffix = stateName ?? stateType ?? 'unknown'
+  if (stateAction === 'remove') {
+    actions.push({
+      type: 'notify',
+      agentId,
+      event: 'issue.state_removed',
+      detail: `Issue ${args.issueLabel} moved to ${stateSuffix}`,
+      ...args,
+      linearUserId: assigneeId,
+    })
+  } else {
+    actions.push({
+      type: 'wake',
+      agentId,
+      event: 'issue.state_readded',
+      detail: `Issue ${args.issueLabel} moved to ${stateSuffix}`,
+      ...args,
+      linearUserId: assigneeId,
+    })
+  }
+}
+
+function handlePriorityChange(
+  event: LinearWebhookPayload,
+  config: EventRouterConfig,
+  args: IssueActionArgs,
+  actions: RouterAction[],
+): void {
+  const updatedFrom = event.updatedFrom ?? {}
+  if (!('priority' in updatedFrom)) return
+
+  const assigneeId = event.data.assigneeId as string | undefined
+  if (!assigneeId) return
+
+  const agentId = config.agentMapping[assigneeId]
+  if (!agentId) return
+
+  actions.push({
+    type: 'notify',
+    agentId,
+    event: 'issue.priority_changed',
+    detail: `Priority changed on issue ${args.issueLabel}`,
+    ...args,
+    linearUserId: assigneeId,
+  })
+}
+
+function handleIssueUpdate(event: LinearWebhookPayload, config: EventRouterConfig): RouterAction[] {
   const actions: RouterAction[] = []
-  const issueId = String(event.data.id ?? 'unknown')
-  const issueLabel = resolveIssueLabel(event.data)
-  const identifier = (event.data.identifier as string) ?? issueId
-  const issuePriority = (event.data.priority as number) ?? 0
-
-  // --- Assignee changes ---
-  if ('assigneeId' in updatedFrom) {
-    const oldAssignee = updatedFrom.assigneeId as string | null | undefined
-    const newAssignee = event.data.assigneeId as string | null | undefined
-
-    if (newAssignee) {
-      const agentId = config.agentMapping[newAssignee]
-      if (agentId) {
-        actions.push({
-          type: 'wake',
-          agentId,
-          event: 'issue.assigned',
-          detail: `Assigned to issue ${issueLabel}`,
-          issueId,
-          issueLabel,
-          identifier,
-          issuePriority,
-          linearUserId: newAssignee,
-        })
-      } else {
-        config.logger.info(`Unmapped Linear user ${newAssignee} assigned to ${issueId}`)
-      }
-    }
-
-    if (oldAssignee && !newAssignee) {
-      const agentId = config.agentMapping[oldAssignee]
-      if (agentId) {
-        actions.push({
-          type: 'notify',
-          agentId,
-          event: 'issue.unassigned',
-          detail: `Unassigned from issue ${issueLabel}`,
-          issueId,
-          issueLabel,
-          identifier,
-          issuePriority,
-          linearUserId: oldAssignee,
-        })
-      } else {
-        config.logger.info(`Unmapped Linear user ${oldAssignee} unassigned from ${issueId}`)
-      }
-    }
-
-    // Reassignment: both old and new assignee present — notify old assignee
-    if (oldAssignee && newAssignee) {
-      const agentId = config.agentMapping[oldAssignee]
-      if (agentId) {
-        actions.push({
-          type: 'notify',
-          agentId,
-          event: 'issue.reassigned',
-          detail: `Reassigned away from issue ${issueLabel}`,
-          issueId,
-          issueLabel,
-          identifier,
-          issuePriority,
-          linearUserId: oldAssignee,
-        })
-      }
-    }
-  }
-
-  // --- State changes (configurable per state type/name) ---
-  if ('stateId' in updatedFrom) {
-    const state = event.data.state as Record<string, unknown> | undefined
-    const stateType = state?.type as string | undefined
-    const stateName = state?.name as string | undefined
-    const action = resolveStateAction(config, stateType, stateName)
-
-    if (action === 'remove' || action === 'add') {
-      const assigneeId = event.data.assigneeId as string | undefined
-      if (assigneeId) {
-        const agentId = config.agentMapping[assigneeId]
-        if (agentId) {
-          if (action === 'remove') {
-            actions.push({
-              type: 'notify',
-              agentId,
-              event: 'issue.state_removed',
-              detail: `Issue ${issueLabel} moved to ${stateName ?? stateType ?? 'unknown'}`,
-              issueId,
-              issueLabel,
-              identifier,
-              issuePriority,
-              linearUserId: assigneeId,
-            })
-          } else {
-            actions.push({
-              type: 'wake',
-              agentId,
-              event: 'issue.state_readded',
-              detail: `Issue ${issueLabel} moved to ${stateName ?? stateType ?? 'unknown'}`,
-              issueId,
-              issueLabel,
-              identifier,
-              issuePriority,
-              linearUserId: assigneeId,
-            })
-          }
-        }
-      }
-    }
-  }
-
-  // --- Priority changes ---
-  if ('priority' in updatedFrom) {
-    const assigneeId = event.data.assigneeId as string | undefined
-    if (assigneeId) {
-      const agentId = config.agentMapping[assigneeId]
-      if (agentId) {
-        actions.push({
-          type: 'notify',
-          agentId,
-          event: 'issue.priority_changed',
-          detail: `Priority changed on issue ${issueLabel}`,
-          issueId,
-          issueLabel,
-          identifier,
-          issuePriority,
-          linearUserId: assigneeId,
-        })
-      }
-    }
-  }
-
+  const args = resolveIssueActionArgs(event.data)
+  handleAssigneeChanges(event, config, args, actions)
+  handleStateChange(event, config, args, actions)
+  handlePriorityChange(event, config, args, actions)
   return actions
 }
 
@@ -300,25 +318,19 @@ function handleIssueCreate(event: LinearWebhookPayload, config: EventRouterConfi
 
   const agentId = config.agentMapping[assigneeId]
   if (!agentId) {
-    config.logger.info(`Unmapped Linear user ${assigneeId} assigned to ${String(event.data.id ?? 'unknown')}`)
+    config.logger.info(`Unmapped Linear user ${assigneeId} assigned to ${toId(event.data.id)}`)
     return []
   }
 
-  const issueId = String(event.data.id ?? 'unknown')
-  const issueLabel = resolveIssueLabel(event.data)
-  const identifier = (event.data.identifier as string) ?? issueId
-  const issuePriority = (event.data.priority as number) ?? 0
+  const args = resolveIssueActionArgs(event.data)
 
   return [
     {
       type: 'wake',
       agentId,
       event: 'issue.assigned',
-      detail: `Assigned to issue ${issueLabel}`,
-      issueId,
-      issueLabel,
-      identifier,
-      issuePriority,
+      detail: `Assigned to issue ${args.issueLabel}`,
+      ...args,
       linearUserId: assigneeId,
     },
   ]
@@ -331,21 +343,15 @@ function handleIssueRemove(event: LinearWebhookPayload, config: EventRouterConfi
   const agentId = config.agentMapping[assigneeId]
   if (!agentId) return []
 
-  const issueId = String(event.data.id ?? 'unknown')
-  const issueLabel = resolveIssueLabel(event.data)
-  const identifier = (event.data.identifier as string) ?? issueId
-  const issuePriority = (event.data.priority as number) ?? 0
+  const args = resolveIssueActionArgs(event.data)
 
   return [
     {
       type: 'notify',
       agentId,
       event: 'issue.removed',
-      detail: `Issue ${issueLabel} removed`,
-      issueId,
-      issueLabel,
-      identifier,
-      issuePriority,
+      detail: `Issue ${args.issueLabel} removed`,
+      ...args,
       linearUserId: assigneeId,
     },
   ]
@@ -354,11 +360,11 @@ function handleIssueRemove(event: LinearWebhookPayload, config: EventRouterConfi
 function handleComment(event: LinearWebhookPayload, config: EventRouterConfig): RouterAction[] {
   const body = event.data.body as string | undefined
   if (!body) {
-    config.logger.info(`Comment ${String(event.data.id ?? 'unknown')} has empty body — skipping`)
+    config.logger.info(`Comment ${toId(event.data.id)} has empty body — skipping`)
     return []
   }
 
-  const commentId = String(event.data.id ?? '')
+  const commentId = typeof event.data.id === 'string' ? event.data.id : ''
   const bodyData = event.data.bodyData
   const mentionedIds = extractMentionedUserIds(body, bodyData, config.agentMapping)
 
@@ -369,7 +375,7 @@ function handleComment(event: LinearWebhookPayload, config: EventRouterConfig): 
   const actions: RouterAction[] = []
 
   const issueRef = event.data.issue as Record<string, unknown> | undefined
-  const issueId = String(issueRef?.id ?? event.data.issueId ?? 'unknown')
+  const issueId = toId(issueRef?.id ?? event.data.issueId)
   const issueLabel = issueRef ? resolveIssueLabel(issueRef) : issueId
   const identifier = (issueRef?.identifier as string) ?? issueId
   const issuePriority = (issueRef?.priority as number) ?? 0

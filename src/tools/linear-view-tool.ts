@@ -1,6 +1,5 @@
 import { Type, type Static } from '@sinclair/typebox'
-import type { AnyAgentTool } from 'openclaw/plugin-sdk'
-import { jsonResult, stringEnum, formatErrorMessage } from 'openclaw/plugin-sdk'
+import { type AnyAgentTool, jsonResult, stringEnum, formatErrorMessage } from 'openclaw/plugin-sdk'
 import { graphql } from '../linear-api.js'
 
 const Params = Type.Object({
@@ -93,6 +92,46 @@ const DELETE_VIEW_MUTATION = `
   }
 `
 
+async function listViews() {
+  const data = await graphql<{ customViews: { nodes: unknown[] } }>(LIST_VIEWS_QUERY)
+  const views = data?.customViews?.nodes ?? []
+  return jsonResult({ count: views.length, views })
+}
+
+async function getView(viewId: string) {
+  const data = await graphql<{ customView: unknown }>(GET_VIEW_QUERY, { id: viewId })
+  return jsonResult(data?.customView ?? null)
+}
+
+async function createView(params: Params) {
+  if (!params.name) throw new Error('name is required for create')
+  const input: Record<string, unknown> = { name: params.name }
+  if (params.description !== undefined) input.description = params.description
+  if (params.icon !== undefined) input.icon = params.icon
+  if (params.color !== undefined) input.color = params.color
+  if (params.filterData !== undefined) input.filterData = JSON.parse(params.filterData) as unknown
+  if (params.shared !== undefined) input.shared = params.shared
+  const data = await graphql<{ customViewCreate: unknown }>(CREATE_VIEW_MUTATION, { input })
+  return jsonResult(data?.customViewCreate ?? null)
+}
+
+async function updateView(viewId: string, params: Params) {
+  const input: Record<string, unknown> = {}
+  if (params.name !== undefined) input.name = params.name
+  if (params.description !== undefined) input.description = params.description
+  if (params.icon !== undefined) input.icon = params.icon
+  if (params.color !== undefined) input.color = params.color
+  if (params.filterData !== undefined) input.filterData = JSON.parse(params.filterData) as unknown
+  if (params.shared !== undefined) input.shared = params.shared
+  const data = await graphql<{ customViewUpdate: unknown }>(UPDATE_VIEW_MUTATION, { id: viewId, input })
+  return jsonResult(data?.customViewUpdate ?? null)
+}
+
+async function deleteView(viewId: string) {
+  const data = await graphql<{ customViewDelete: unknown }>(DELETE_VIEW_MUTATION, { id: viewId })
+  return jsonResult(data?.customViewDelete ?? null)
+}
+
 export function createViewTool(): AnyAgentTool {
   return {
     name: 'linear_view',
@@ -100,57 +139,22 @@ export function createViewTool(): AnyAgentTool {
     description: 'Manage Linear custom views. Actions: list, get, create, update, delete.',
     parameters: Params,
     async execute(_toolCallId: string, params: Params) {
-      const { action, viewId, name, description, icon, color, filterData, shared } = params
-
       try {
-        if (action === 'list') {
-          const data = await graphql<{
-            customViews: { nodes: unknown[] }
-          }>(LIST_VIEWS_QUERY)
-          const views = data?.customViews?.nodes ?? []
-          return jsonResult({ count: views.length, views })
+        if (params.action === 'list') return await listViews()
+        if (params.action === 'get') {
+          if (!params.viewId) throw new Error('viewId is required for get')
+          return await getView(params.viewId)
         }
-
-        if (action === 'get') {
-          if (!viewId) throw new Error('viewId is required for get')
-          const data = await graphql<{ customView: unknown }>(GET_VIEW_QUERY, {
-            id: viewId,
-          })
-          return jsonResult(data?.customView ?? null)
+        if (params.action === 'create') return await createView(params)
+        if (params.action === 'update') {
+          if (!params.viewId) throw new Error('viewId is required for update')
+          return await updateView(params.viewId, params)
         }
-
-        if (action === 'create') {
-          if (!name) throw new Error('name is required for create')
-          const input: Record<string, unknown> = { name }
-          if (description !== undefined) input.description = description
-          if (icon !== undefined) input.icon = icon
-          if (color !== undefined) input.color = color
-          if (filterData !== undefined) input.filterData = JSON.parse(filterData)
-          if (shared !== undefined) input.shared = shared
-          const data = await graphql<{ customViewCreate: unknown }>(CREATE_VIEW_MUTATION, { input })
-          return jsonResult(data?.customViewCreate ?? null)
+        if (params.action === 'delete') {
+          if (!params.viewId) throw new Error('viewId is required for delete')
+          return await deleteView(params.viewId)
         }
-
-        if (action === 'update') {
-          if (!viewId) throw new Error('viewId is required for update')
-          const input: Record<string, unknown> = {}
-          if (name !== undefined) input.name = name
-          if (description !== undefined) input.description = description
-          if (icon !== undefined) input.icon = icon
-          if (color !== undefined) input.color = color
-          if (filterData !== undefined) input.filterData = JSON.parse(filterData)
-          if (shared !== undefined) input.shared = shared
-          const data = await graphql<{ customViewUpdate: unknown }>(UPDATE_VIEW_MUTATION, { id: viewId, input })
-          return jsonResult(data?.customViewUpdate ?? null)
-        }
-
-        if (action === 'delete') {
-          if (!viewId) throw new Error('viewId is required for delete')
-          const data = await graphql<{ customViewDelete: unknown }>(DELETE_VIEW_MUTATION, { id: viewId })
-          return jsonResult(data?.customViewDelete ?? null)
-        }
-
-        throw new Error(`Unknown action: ${action}`)
+        throw new Error(`Unknown action: ${params.action as string}`)
       } catch (err) {
         return jsonResult({ error: formatErrorMessage(err) })
       }

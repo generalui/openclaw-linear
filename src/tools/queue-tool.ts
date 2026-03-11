@@ -1,6 +1,5 @@
 import { Type, type Static } from '@sinclair/typebox'
-import type { AnyAgentTool } from 'openclaw/plugin-sdk'
-import { jsonResult, stringEnum } from 'openclaw/plugin-sdk'
+import { type AnyAgentTool, jsonResult, stringEnum } from 'openclaw/plugin-sdk'
 import type { InboxQueue } from '../work-queue.js'
 
 const QueueAction = stringEnum(['peek', 'pop', 'drain', 'complete'] as const, {

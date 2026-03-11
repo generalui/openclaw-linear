@@ -1,6 +1,5 @@
 import { Type, type Static } from '@sinclair/typebox'
-import type { AnyAgentTool } from 'openclaw/plugin-sdk'
-import { jsonResult, stringEnum, formatErrorMessage } from 'openclaw/plugin-sdk'
+import { type AnyAgentTool, jsonResult, stringEnum, formatErrorMessage } from 'openclaw/plugin-sdk'
 import {
   graphql,
   resolveIssueId,
@@ -308,17 +307,12 @@ async function createIssue(params: Params) {
   return jsonResult(data.issueCreate)
 }
 
-async function updateIssue(params: Params) {
-  if (!params.issueId) {
-    return jsonResult({ error: 'issueId is required for update' })
-  }
-
-  const id = await resolveIssueId(params.issueId)
+async function resolveUpdateInput(params: Params, id: string): Promise<Record<string, unknown>> {
   const input: Record<string, unknown> = {}
 
-  // We need the team ID for state/label resolution, or the current description for append
+  // Fetch team ID (for state/label resolution) and current description (for append)
   let teamId: string | undefined
-  if (params.state || params.labels?.length || params.appendDescription) {
+  if (params.state ?? params.labels?.length ?? params.appendDescription) {
     const issueData = await graphql<{
       issue: { team: { id: string }; description?: string }
     }>(
@@ -348,10 +342,19 @@ async function updateIssue(params: Params) {
   if (params.state) input.stateId = await resolveStateId(teamId!, params.state)
   if (params.assignee) input.assigneeId = await resolveUserId(params.assignee)
   if (params.project) input.projectId = await resolveProjectId(params.project)
-  if (params.labels?.length) {
-    input.labelIds = await resolveLabelIds(teamId!, params.labels)
-  }
+  if (params.labels?.length) input.labelIds = await resolveLabelIds(teamId!, params.labels)
   if (params.dueDate !== undefined) input.dueDate = params.dueDate || null
+
+  return input
+}
+
+async function updateIssue(params: Params) {
+  if (!params.issueId) {
+    return jsonResult({ error: 'issueId is required for update' })
+  }
+
+  const id = await resolveIssueId(params.issueId)
+  const input = await resolveUpdateInput(params, id)
 
   const data = await graphql<{
     issueUpdate: {

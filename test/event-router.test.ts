@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createEventRouter } from '../src/event-router.js'
+import { createEventRouter, type EventRouterConfig } from '../src/event-router.js'
 import type { LinearWebhookPayload } from '../src/webhook-handler.js'
-import type { EventRouterConfig } from '../src/event-router.js'
 
 function makeConfig(
   agentMapping: Record<string, string> = {

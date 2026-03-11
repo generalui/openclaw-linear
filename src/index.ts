@@ -1,5 +1,4 @@
-import type { OpenClawPluginApi } from 'openclaw/plugin-sdk'
-import { formatErrorMessage } from 'openclaw/plugin-sdk'
+import { type OpenClawPluginApi, formatErrorMessage } from 'openclaw/plugin-sdk'
 import { createWebhookHandler } from './webhook-handler.js'
 import { createEventRouter, type RouterAction } from './event-router.js'
 import { InboxQueue, type EnqueueEntry } from './work-queue.js'
@@ -127,20 +126,27 @@ async function dispatchConsolidatedActions(
 let activeDebouncer: { flushKey: (key: string) => Promise<void> } | undefined
 const activeDebouncerKeys = new Set<string>()
 
-export function activate(api: OpenClawPluginApi): void {
-  api.logger.info('Linear plugin activated')
+type ResolvedPluginConfig = {
+  linearApiKey: string
+  webhookSecret: string
+  agentMapping: Record<string, string>
+  eventFilter: string[]
+  teamIds: string[]
+  debounceMs: number
+  stateActions: Record<string, string> | undefined
+}
 
+function resolvePluginConfig(api: OpenClawPluginApi): ResolvedPluginConfig | null {
   const linearApiKey = api.pluginConfig?.apiKey
   if (typeof linearApiKey !== 'string' || !linearApiKey) {
     api.logger.error('[linear] apiKey is not configured — plugin is inert')
-    return
+    return null
   }
-  setApiKey(linearApiKey)
 
   const webhookSecret = api.pluginConfig?.webhookSecret
   if (typeof webhookSecret !== 'string' || !webhookSecret) {
     api.logger.error('[linear] webhookSecret is not configured — plugin is inert')
-    return
+    return null
   }
 
   const agentMapping = (api.pluginConfig?.agentMapping as Record<string, string>) ?? {}
@@ -152,6 +158,19 @@ export function activate(api: OpenClawPluginApi): void {
   const teamIds = (api.pluginConfig?.teamIds as string[]) ?? []
   const rawDebounceMs = api.pluginConfig?.debounceMs as number | undefined
   const debounceMs = typeof rawDebounceMs === 'number' && rawDebounceMs > 0 ? rawDebounceMs : DEFAULT_DEBOUNCE_MS
+  const stateActions = (api.pluginConfig?.stateActions as Record<string, string>) ?? undefined
+
+  return { linearApiKey, webhookSecret, agentMapping, eventFilter, teamIds, debounceMs, stateActions }
+}
+
+export function activate(api: OpenClawPluginApi): void {
+  api.logger.info('Linear plugin activated')
+
+  const pluginCfg = resolvePluginConfig(api)
+  if (!pluginCfg) return
+
+  const { linearApiKey, webhookSecret, agentMapping, eventFilter, teamIds, debounceMs, stateActions } = pluginCfg
+  setApiKey(linearApiKey)
 
   const core = api.runtime
   const cfg = api.config
@@ -181,7 +200,8 @@ export function activate(api: OpenClawPluginApi): void {
   api.registerTool(createViewTool())
 
   // Auto-wake: after a "complete" action, dispatch a fresh session if items remain
-  api.on('after_tool_call', async (event) => {
+  async function handleAfterToolCall(rawEvent: unknown): Promise<void> {
+    const event = rawEvent as { toolName: string; params: Record<string, unknown>; error?: unknown }
     if (event.toolName !== 'linear_queue') return
     if (event.params.action !== 'complete') return
     if (event.error) return
@@ -232,9 +252,10 @@ export function activate(api: OpenClawPluginApi): void {
       .catch((err) => {
         api.logger.error(`[linear] Queue wake dispatch failed: ${formatErrorMessage(err)}`)
       })
+  }
+  api.on('after_tool_call', (event: unknown) => {
+    void handleAfterToolCall(event)
   })
-
-  const stateActions = (api.pluginConfig?.stateActions as Record<string, string>) ?? undefined
 
   const routeEvent = createEventRouter({
     agentMapping,
@@ -267,7 +288,7 @@ export function activate(api: OpenClawPluginApi): void {
 
         if (action.type === 'wake') {
           activeDebouncerKeys.add(action.agentId)
-          debouncer.enqueue(action)
+          void debouncer.enqueue(action)
         }
 
         if (action.type === 'notify') {
@@ -287,23 +308,18 @@ export function activate(api: OpenClawPluginApi): void {
     },
   })
 
-  api.registerHttpRoute({
-    path: '/linear',
-    handler,
-    auth: 'plugin',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any
+  api.registerHttpRoute({ path: '/linear', handler, auth: 'plugin' } as any)
 
   api.logger.info(`Linear webhook handler registered at /linear (debounce: ${debounceMs}ms)`)
 }
 
 export async function deactivate(api: OpenClawPluginApi): Promise<void> {
-  if (activeDebouncer) {
-    for (const key of activeDebouncerKeys) {
-      await activeDebouncer.flushKey(key)
-    }
+  const debouncer = activeDebouncer
+  activeDebouncer = undefined
+  if (debouncer) {
+    await Promise.all([...activeDebouncerKeys].map((key) => debouncer.flushKey(key)))
     activeDebouncerKeys.clear()
-    activeDebouncer = undefined
   }
   api.logger.info('Linear plugin deactivated')
 }
