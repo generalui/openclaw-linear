@@ -1,10 +1,7 @@
-# openclaw-linear (GenUI Fork)
-
-A GenUI-maintained fork of [stepandel/openclaw-linear](https://github.com/stepandel/openclaw-linear), with bug fixes and additional capabilities including Linear view management.
-
----
-
 # openclaw-linear
+
+> GenUI-maintained fork of [stepandel/openclaw-linear](https://github.com/stepandel/openclaw-linear),
+> with bug fixes and additional capabilities including Linear view management.
 
 Linear integration for [OpenClaw](https://github.com/nichochar/openclaw). Receives Linear webhook events, routes them through a persistent work queue, and gives agents tools to manage issues, comments, projects, teams, and relations via the Linear GraphQL API.
 
@@ -52,6 +49,7 @@ plugins:
 ## Webhook Setup
 
 1. **Make your endpoint publicly accessible.** The plugin registers at `/hooks/linear`:
+
    ```bash
    # Example with Tailscale Funnel
    tailscale funnel --bg 3000
@@ -126,7 +124,14 @@ plugins:
                     (new session)
 ```
 
-Events flow through four stages. The **webhook handler** verifies signatures and deduplicates deliveries. The **event router** filters by team, type, and user, then classifies each event as `wake` (needs the agent's attention now) or `notify` (queue silently). Wake actions pass through a **debouncer** that batches events within a configurable window. Both paths write to the **work queue** — a persistent, priority-sorted JSONL file. The agent is only woken when new items are actually added (deduplication may suppress a dispatch). After the agent completes an item, **auto-wake** checks for remaining work and starts a fresh session if needed.
+Events flow through four stages.
+The **webhook handler** verifies signatures and deduplicates deliveries.
+The **event router** filters by team, type, and user, then classifies each event as `wake`
+(needs the agent's attention now) or `notify` (queue silently).
+Wake actions pass through a **debouncer** that batches events within a configurable window.
+Both paths write to the **work queue** — a persistent, priority-sorted JSONL file.
+The agent is only woken when new items are actually added (deduplication may suppress a dispatch).
+After the agent completes an item, **auto-wake** checks for remaining work and starts a fresh session if needed.
 
 ## Work Queue
 
