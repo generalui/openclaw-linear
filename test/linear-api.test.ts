@@ -1,307 +1,351 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+/**
+ * Tests for linear-api.ts resolver functions.
+ *
+ * The graphql() function itself is mocked globally via vi.stubGlobal('fetch', ...)
+ * so we can verify HTTP behaviour without hitting the network.
+ * Resolver functions (resolveIssueId, resolveStateId, etc.) are tested against
+ * the mocked graphql layer to verify their parsing/matching/caching logic.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  graphql,
   setApiKey,
   _resetApiKey,
-  resolveIssueId,
   _resetIssueIdCache,
+  graphql,
+  resolveIssueId,
   resolveTeamId,
   resolveStateId,
   resolveUserId,
   resolveLabelIds,
   resolveProjectId,
-} from "../src/linear-api.js";
+} from '../src/linear-api.js'
 
-const mockFetch = vi.fn();
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function mockFetch(body: unknown, status = 200) {
+  return vi.fn().mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 200 ? 'OK' : 'Error',
+    json: vi.fn().mockResolvedValue(body),
+    text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+  })
+}
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  vi.stubGlobal("fetch", mockFetch);
-  _resetApiKey();
-  _resetIssueIdCache();
-});
+  setApiKey('test-api-key')
+  _resetIssueIdCache()
+})
 
 afterEach(() => {
-  vi.restoreAllMocks();
-});
+  _resetApiKey()
+  vi.restoreAllMocks()
+})
 
-function mockGraphqlResponse(data: unknown) {
-  mockFetch.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({ data }),
-  });
-}
+// ---------------------------------------------------------------------------
+// graphql()
+// ---------------------------------------------------------------------------
 
-function mockGraphqlError(message: string) {
-  mockFetch.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({ errors: [{ message }] }),
-  });
-}
+describe('graphql()', () => {
+  it('throws when API key is not set', async () => {
+    _resetApiKey()
+    await expect(graphql('{ viewer { id } }')).rejects.toThrow('Linear API key not set')
+  })
 
-describe("graphql", () => {
-  it("throws if API key is not set", async () => {
-    await expect(graphql("{ viewer { id } }")).rejects.toThrow(
-      "API key not set",
-    );
-  });
+  it('sends POST to Linear API with correct headers and body', async () => {
+    const fetchMock = mockFetch({ data: { viewer: { id: 'u1' } } })
+    vi.stubGlobal('fetch', fetchMock)
 
-  it("sends correct headers and body", async () => {
-    setApiKey("lin_api_test123");
-    mockGraphqlResponse({ viewer: { id: "u1" } });
+    await graphql<{ viewer: { id: string } }>('{ viewer { id } }', { foo: 'bar' })
 
-    await graphql("{ viewer { id } }");
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.linear.app/graphql')
+    expect(options.method).toBe('POST')
+    expect((options.headers as Record<string, string>).Authorization).toBe('test-api-key')
+    expect((options.headers as Record<string, string>)['Content-Type']).toBe('application/json')
+    const body = JSON.parse(options.body as string) as { query: string; variables: Record<string, unknown> }
+    expect(body.query).toBe('{ viewer { id } }')
+    expect(body.variables).toEqual({ foo: 'bar' })
+  })
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://api.linear.app/graphql",
-      expect.objectContaining({
-        method: "POST",
-        headers: {
-          Authorization: "lin_api_test123",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ query: "{ viewer { id } }" }),
-      }),
-    );
-  });
+  it('returns data from successful response', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { viewer: { id: 'u1' } } }))
+    const result = await graphql<{ viewer: { id: string } }>('{ viewer { id } }')
+    expect(result.viewer.id).toBe('u1')
+  })
 
-  it("returns data on success", async () => {
-    setApiKey("lin_api_test");
-    mockGraphqlResponse({ viewer: { id: "u1", name: "Test" } });
+  it('throws on HTTP error status', async () => {
+    vi.stubGlobal('fetch', mockFetch({ message: 'Unauthorized' }, 401))
+    await expect(graphql('{ viewer { id } }')).rejects.toThrow('Linear API HTTP 401')
+  })
 
-    const result = await graphql<{ viewer: { id: string; name: string } }>(
-      "{ viewer { id name } }",
-    );
-    expect(result.viewer).toEqual({ id: "u1", name: "Test" });
-  });
+  it('throws on GraphQL-level errors', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: null, errors: [{ message: 'Not found' }] }))
+    await expect(graphql('{ viewer { id } }')).rejects.toThrow('Linear API error: Not found')
+  })
 
-  it("passes variables", async () => {
-    setApiKey("lin_api_test");
-    mockGraphqlResponse({ issue: { id: "i1" } });
+  it('handles missing variables (sends no variables key in body)', async () => {
+    const fetchMock = mockFetch({ data: {} })
+    vi.stubGlobal('fetch', fetchMock)
+    await graphql('{ viewer { id } }')
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      variables?: unknown
+    }
+    // variables should be undefined/absent when not passed
+    expect(body.variables).toBeUndefined()
+  })
+})
 
-    await graphql("query($id: String!) { issue(id: $id) { id } }", {
-      id: "i1",
-    });
+// ---------------------------------------------------------------------------
+// resolveIssueId()
+// ---------------------------------------------------------------------------
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.variables).toEqual({ id: "i1" });
-  });
+describe('resolveIssueId()', () => {
+  it('resolves a valid identifier (ENG-42) to a UUID', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { issues: { nodes: [{ id: 'uuid-abc' }] } } }))
+    const id = await resolveIssueId('ENG-42')
+    expect(id).toBe('uuid-abc')
+  })
 
-  it("throws on HTTP error with response body", async () => {
-    setApiKey("lin_api_test");
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      statusText: "Unauthorized",
-      text: async () => '{"error":"Invalid API key"}',
-    });
+  it('uppercases the team key in the query', async () => {
+    const fetchMock = mockFetch({ data: { issues: { nodes: [{ id: 'uuid-1' }] } } })
+    vi.stubGlobal('fetch', fetchMock)
+    await resolveIssueId('eng-42')
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      variables: { teamKey: string; num: number }
+    }
+    expect(body.variables.teamKey).toBe('ENG')
+    expect(body.variables.num).toBe(42)
+  })
 
-    await expect(graphql("{ viewer { id } }")).rejects.toThrow(
-      'HTTP 401: Unauthorized: {"error":"Invalid API key"}',
-    );
-  });
+  it('throws for non-identifier format (plain UUID / non-matching string)', async () => {
+    await expect(resolveIssueId('not-an-id')).rejects.toThrow('Invalid issue identifier format')
+    await expect(resolveIssueId('12345')).rejects.toThrow('Invalid issue identifier format')
+    await expect(resolveIssueId('')).rejects.toThrow('Invalid issue identifier format')
+  })
 
-  it("throws on HTTP error without response body", async () => {
-    setApiKey("lin_api_test");
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      statusText: "Internal Server Error",
-      text: async () => "",
-    });
+  it('throws when issue is not found', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { issues: { nodes: [] } } }))
+    await expect(resolveIssueId('ENG-999')).rejects.toThrow('Issue ENG-999 not found')
+  })
 
-    await expect(graphql("{ viewer { id } }")).rejects.toThrow(
-      "HTTP 500: Internal Server Error",
-    );
-  });
+  it('caches the result on second call (fetch called once)', async () => {
+    const fetchMock = mockFetch({ data: { issues: { nodes: [{ id: 'uuid-cached' }] } } })
+    vi.stubGlobal('fetch', fetchMock)
 
-  it("throws on GraphQL error", async () => {
-    setApiKey("lin_api_test");
-    mockGraphqlError("Entity not found");
+    const id1 = await resolveIssueId('ENG-10')
+    const id2 = await resolveIssueId('ENG-10')
 
-    await expect(graphql("{ issue(id: \"bad\") { id } }")).rejects.toThrow(
-      "Entity not found",
-    );
-  });
-});
+    expect(id1).toBe('uuid-cached')
+    expect(id2).toBe('uuid-cached')
+    expect(fetchMock).toHaveBeenCalledOnce() // second call hits cache
+  })
 
-describe("resolveIssueId", () => {
-  beforeEach(() => {
-    setApiKey("lin_api_test");
-  });
+  it('_resetIssueIdCache clears the cache (fetch called again)', async () => {
+    const fetchMock = mockFetch({ data: { issues: { nodes: [{ id: 'uuid-fresh' }] } } })
+    vi.stubGlobal('fetch', fetchMock)
 
-  it("resolves a valid identifier", async () => {
-    mockGraphqlResponse({
-      issues: { nodes: [{ id: "uuid-123" }] },
-    });
+    await resolveIssueId('ENG-10')
+    _resetIssueIdCache()
+    await resolveIssueId('ENG-10')
 
-    const id = await resolveIssueId("ENG-42");
-    expect(id).toBe("uuid-123");
-  });
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
 
-  it("caches resolved IDs", async () => {
-    mockGraphqlResponse({
-      issues: { nodes: [{ id: "uuid-123" }] },
-    });
+  it('caches different identifiers independently', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ data: { issues: { nodes: [{ id: 'uuid-1' }] } } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ data: { issues: { nodes: [{ id: 'uuid-2' }] } } }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
 
-    await resolveIssueId("ENG-42");
-    const id2 = await resolveIssueId("ENG-42");
-    expect(id2).toBe("uuid-123");
-    expect(mockFetch).toHaveBeenCalledTimes(1); // Only one API call
-  });
+    const id1 = await resolveIssueId('ENG-1')
+    const id2 = await resolveIssueId('ENG-2')
 
-  it("throws on invalid format", async () => {
-    await expect(resolveIssueId("bad-format-123")).rejects.toThrow(
-      "Invalid issue identifier format",
-    );
-  });
+    expect(id1).toBe('uuid-1')
+    expect(id2).toBe('uuid-2')
+  })
+})
 
-  it("throws when issue not found", async () => {
-    mockGraphqlResponse({ issues: { nodes: [] } });
-    await expect(resolveIssueId("ENG-999")).rejects.toThrow(
-      "Issue ENG-999 not found",
-    );
-  });
-});
+// ---------------------------------------------------------------------------
+// resolveTeamId()
+// ---------------------------------------------------------------------------
 
-describe("resolveTeamId", () => {
-  beforeEach(() => {
-    setApiKey("lin_api_test");
-  });
+describe('resolveTeamId()', () => {
+  it('returns team UUID for a matching key', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { teams: { nodes: [{ id: 'team-uuid' }] } } }))
+    const id = await resolveTeamId('ENG')
+    expect(id).toBe('team-uuid')
+  })
 
-  it("resolves team by key", async () => {
-    mockGraphqlResponse({ teams: { nodes: [{ id: "team-1" }] } });
-    const id = await resolveTeamId("ENG");
-    expect(id).toBe("team-1");
-  });
+  it('uppercases the team key in the query', async () => {
+    const fetchMock = mockFetch({ data: { teams: { nodes: [{ id: 'team-uuid' }] } } })
+    vi.stubGlobal('fetch', fetchMock)
+    await resolveTeamId('eng')
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      variables: { key: string }
+    }
+    expect(body.variables.key).toBe('ENG')
+  })
 
-  it("throws when team not found", async () => {
-    mockGraphqlResponse({ teams: { nodes: [] } });
-    await expect(resolveTeamId("NOPE")).rejects.toThrow('Team with key "NOPE" not found');
-  });
-});
+  it('throws when team is not found', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { teams: { nodes: [] } } }))
+    await expect(resolveTeamId('NOPE')).rejects.toThrow('Team with key "NOPE" not found')
+  })
+})
 
-describe("resolveStateId", () => {
-  beforeEach(() => {
-    setApiKey("lin_api_test");
-  });
+// ---------------------------------------------------------------------------
+// resolveStateId()
+// ---------------------------------------------------------------------------
 
-  it("resolves state by name and team", async () => {
-    mockGraphqlResponse({
+describe('resolveStateId()', () => {
+  const states = {
+    data: {
       team: {
         states: {
           nodes: [
-            { id: "state-1", name: "In Progress" },
-            { id: "state-2", name: "Done" },
+            { id: 'state-todo', name: 'Todo' },
+            { id: 'state-done', name: 'Done' },
+            { id: 'state-prog', name: 'In Progress' },
           ],
         },
       },
-    });
-    const id = await resolveStateId("team-1", "In Progress");
-    expect(id).toBe("state-1");
-  });
+    },
+  }
 
-  it("is case-insensitive", async () => {
-    mockGraphqlResponse({
-      team: {
-        states: { nodes: [{ id: "state-1", name: "In Progress" }] },
-      },
-    });
-    const id = await resolveStateId("team-1", "in progress");
-    expect(id).toBe("state-1");
-  });
+  it('returns state UUID for exact name match', async () => {
+    vi.stubGlobal('fetch', mockFetch(states))
+    const id = await resolveStateId('team-1', 'Todo')
+    expect(id).toBe('state-todo')
+  })
 
-  it("throws when state not found with available states", async () => {
-    mockGraphqlResponse({
-      team: {
-        states: {
-          nodes: [
-            { id: "state-1", name: "Todo" },
-            { id: "state-2", name: "Done" },
-          ],
-        },
-      },
-    });
-    await expect(resolveStateId("team-1", "Nonexistent")).rejects.toThrow(
-      'Workflow state "Nonexistent" not found. Available states: Todo, Done',
-    );
-  });
-});
+  it('matches state name case-insensitively', async () => {
+    vi.stubGlobal('fetch', mockFetch(states))
+    const id = await resolveStateId('team-1', 'todo')
+    expect(id).toBe('state-todo')
+  })
 
-describe("resolveUserId", () => {
-  beforeEach(() => {
-    setApiKey("lin_api_test");
-  });
+  it('matches multi-word state names case-insensitively', async () => {
+    vi.stubGlobal('fetch', mockFetch(states))
+    const id = await resolveStateId('team-1', 'in progress')
+    expect(id).toBe('state-prog')
+  })
 
-  it("resolves user by name or email", async () => {
-    mockGraphqlResponse({ users: { nodes: [{ id: "user-1" }] } });
-    const id = await resolveUserId("Alice");
-    expect(id).toBe("user-1");
-  });
+  it('throws when state not found and lists available states', async () => {
+    vi.stubGlobal('fetch', mockFetch(states))
+    await expect(resolveStateId('team-1', 'Unknown')).rejects.toThrow(
+      'Workflow state "Unknown" not found. Available states: Todo, Done, In Progress',
+    )
+  })
+})
 
-  it("throws when user not found", async () => {
-    mockGraphqlResponse({ users: { nodes: [] } });
-    await expect(resolveUserId("nobody")).rejects.toThrow('User "nobody" not found');
-  });
-});
+// ---------------------------------------------------------------------------
+// resolveUserId()
+// ---------------------------------------------------------------------------
 
-describe("resolveLabelIds", () => {
-  beforeEach(() => {
-    setApiKey("lin_api_test");
-  });
+describe('resolveUserId()', () => {
+  it('resolves a user by name', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { users: { nodes: [{ id: 'user-uuid' }] } } }))
+    const id = await resolveUserId('Alice')
+    expect(id).toBe('user-uuid')
+  })
 
-  it("resolves label names to IDs", async () => {
-    mockGraphqlResponse({
+  it('resolves a user by email', async () => {
+    const fetchMock = mockFetch({ data: { users: { nodes: [{ id: 'user-uuid' }] } } })
+    vi.stubGlobal('fetch', fetchMock)
+    await resolveUserId('alice@example.com')
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      variables: { term: string }
+    }
+    expect(body.variables.term).toBe('alice@example.com')
+  })
+
+  it('throws when user not found', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { users: { nodes: [] } } }))
+    await expect(resolveUserId('Nobody')).rejects.toThrow('User "Nobody" not found')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveLabelIds()
+// ---------------------------------------------------------------------------
+
+describe('resolveLabelIds()', () => {
+  const labelData = {
+    data: {
       team: {
         labels: {
           nodes: [
-            { id: "l1", name: "Bug" },
-            { id: "l2", name: "Feature" },
+            { id: 'label-bug', name: 'Bug' },
+            { id: 'label-feat', name: 'Feature' },
+            { id: 'label-docs', name: 'Documentation' },
           ],
         },
       },
-    });
-    const ids = await resolveLabelIds("team-1", ["Bug", "Feature"]);
-    expect(ids).toEqual(["l1", "l2"]);
-  });
+    },
+  }
 
-  it("is case-insensitive", async () => {
-    mockGraphqlResponse({
-      team: {
-        labels: { nodes: [{ id: "l1", name: "Bug" }] },
-      },
-    });
-    const ids = await resolveLabelIds("team-1", ["bug"]);
-    expect(ids).toEqual(["l1"]);
-  });
+  it('returns IDs for matching label names', async () => {
+    vi.stubGlobal('fetch', mockFetch(labelData))
+    const ids = await resolveLabelIds('team-1', ['Bug', 'Feature'])
+    expect(ids).toEqual(['label-bug', 'label-feat'])
+  })
 
-  it("throws when label not found", async () => {
-    mockGraphqlResponse({
-      team: { labels: { nodes: [{ id: "l1", name: "Bug" }] } },
-    });
-    await expect(resolveLabelIds("team-1", ["Missing"])).rejects.toThrow(
-      'Label "Missing" not found in team',
-    );
-  });
-});
+  it('matches label names case-insensitively', async () => {
+    vi.stubGlobal('fetch', mockFetch(labelData))
+    const ids = await resolveLabelIds('team-1', ['bug', 'FEATURE'])
+    expect(ids).toEqual(['label-bug', 'label-feat'])
+  })
 
-describe("resolveProjectId", () => {
-  beforeEach(() => {
-    setApiKey("lin_api_test");
-  });
+  it('returns empty array for empty name list', async () => {
+    vi.stubGlobal('fetch', mockFetch(labelData))
+    const ids = await resolveLabelIds('team-1', [])
+    expect(ids).toEqual([])
+  })
 
-  it("resolves project by name", async () => {
-    mockGraphqlResponse({
-      projects: { nodes: [{ id: "proj-1", name: "Alpha" }] },
-    });
-    const id = await resolveProjectId("Alpha");
-    expect(id).toBe("proj-1");
-  });
+  it('throws when a label is not found', async () => {
+    vi.stubGlobal('fetch', mockFetch(labelData))
+    await expect(resolveLabelIds('team-1', ['Bug', 'Nonexistent'])).rejects.toThrow(
+      'Label "Nonexistent" not found in team',
+    )
+  })
 
-  it("throws when project not found", async () => {
-    mockGraphqlResponse({ projects: { nodes: [] } });
-    await expect(resolveProjectId("Nonexistent")).rejects.toThrow(
-      'Project "Nonexistent" not found',
-    );
-  });
-});
+  it('preserves label ID order matching input name order', async () => {
+    vi.stubGlobal('fetch', mockFetch(labelData))
+    const ids = await resolveLabelIds('team-1', ['Documentation', 'Bug'])
+    expect(ids).toEqual(['label-docs', 'label-bug'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveProjectId()
+// ---------------------------------------------------------------------------
+
+describe('resolveProjectId()', () => {
+  it('returns project UUID for a matching name', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        data: {
+          projects: { nodes: [{ id: 'proj-uuid', name: 'My Project' }] },
+        },
+      }),
+    )
+    const id = await resolveProjectId('My Project')
+    expect(id).toBe('proj-uuid')
+  })
+
+  it('throws when project not found', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { projects: { nodes: [] } } }))
+    await expect(resolveProjectId('Ghost Project')).rejects.toThrow('Project "Ghost Project" not found')
+  })
+})

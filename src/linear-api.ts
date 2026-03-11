@@ -1,206 +1,222 @@
-const API_URL = "https://api.linear.app/graphql";
+const API_URL = 'https://api.linear.app/graphql'
 
-let apiKey: string | undefined;
+let apiKey: string | undefined
 
 export function setApiKey(key: string): void {
-  apiKey = key;
+  apiKey = key
 }
 
 /** Reset API key (for testing). */
 export function _resetApiKey(): void {
-  apiKey = undefined;
+  apiKey = undefined
 }
 
-export async function graphql<T>(
-  query: string,
-  variables?: Record<string, unknown>,
-): Promise<T> {
+export async function graphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
   if (!apiKey) {
-    throw new Error("Linear API key not set — call setApiKey() first");
+    throw new Error('Linear API key not set — call setApiKey() first')
   }
 
   const res = await fetch(API_URL, {
-    method: "POST",
+    method: 'POST',
     headers: {
       Authorization: apiKey,
-      "Content-Type": "application/json",
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({ query, variables }),
-  });
+  })
 
   if (!res.ok) {
-    let detail = res.statusText;
+    let detail = res.statusText
     try {
-      const body = await res.text();
-      if (body) detail += `: ${body}`;
+      const body = await res.text()
+      if (body) detail += `: ${body}`
     } catch {
       // ignore read errors
     }
-    throw new Error(`Linear API HTTP ${res.status}: ${detail}`);
+    throw new Error(`Linear API HTTP ${res.status}: ${detail}`)
   }
 
   const json = (await res.json()) as {
-    data?: T;
-    errors?: { message: string }[];
-  };
-
-  if (json.errors?.length) {
-    throw new Error(`Linear API error: ${json.errors[0].message}`);
+    data?: T
+    errors?: { message: string }[]
   }
 
-  return json.data as T;
+  if (json.errors?.length) {
+    throw new Error(`Linear API error: ${json.errors[0].message}`)
+  }
+
+  return json.data as T
 }
 
 // --- Name/ID resolution helpers ---
 
-const issueIdCache = new Map<string, string>();
+const issueIdCache = new Map<string, string>()
 
 export async function resolveIssueId(identifier: string): Promise<string> {
-  const cached = issueIdCache.get(identifier);
-  if (cached) return cached;
+  const cached = issueIdCache.get(identifier)
+  if (cached) return cached
 
-  const match = identifier.match(/^([A-Za-z]+)-(\d+)$/);
+  const match = identifier.match(/^([A-Za-z]+)-(\d+)$/)
   if (!match) {
-    throw new Error(`Invalid issue identifier format: ${identifier} (expected e.g. ENG-123)`);
+    throw new Error(`Invalid issue identifier format: ${identifier} (expected e.g. ENG-123)`)
   }
 
-  const [, teamKey, numStr] = match;
-  const num = parseInt(numStr, 10);
+  const [, teamKey, numStr] = match
+  const num = parseInt(numStr, 10)
 
   const data = await graphql<{
-    issues: { nodes: { id: string }[] };
+    issues: { nodes: { id: string }[] }
   }>(
-    `query($teamKey: String!, $num: Float!) {
-      issues(filter: { team: { key: { eq: $teamKey } }, number: { eq: $num } }) {
-        nodes { id }
+    `
+      query ($teamKey: String!, $num: Float!) {
+        issues(filter: { team: { key: { eq: $teamKey } }, number: { eq: $num } }) {
+          nodes {
+            id
+          }
+        }
       }
-    }`,
+    `,
     { teamKey: teamKey.toUpperCase(), num },
-  );
+  )
 
   if (data.issues.nodes.length === 0) {
-    throw new Error(`Issue ${identifier} not found`);
+    throw new Error(`Issue ${identifier} not found`)
   }
 
-  const id = data.issues.nodes[0].id;
-  issueIdCache.set(identifier, id);
-  return id;
+  const id = data.issues.nodes[0].id
+  issueIdCache.set(identifier, id)
+  return id
 }
 
 /** Reset issue ID cache (for testing). */
 export function _resetIssueIdCache(): void {
-  issueIdCache.clear();
+  issueIdCache.clear()
 }
 
 export async function resolveTeamId(key: string): Promise<string> {
   const data = await graphql<{
-    teams: { nodes: { id: string }[] };
+    teams: { nodes: { id: string }[] }
   }>(
-    `query($key: String!) {
-      teams(filter: { key: { eq: $key } }) {
-        nodes { id }
+    `
+      query ($key: String!) {
+        teams(filter: { key: { eq: $key } }) {
+          nodes {
+            id
+          }
+        }
       }
-    }`,
+    `,
     { key: key.toUpperCase() },
-  );
+  )
 
   if (data.teams.nodes.length === 0) {
-    throw new Error(`Team with key "${key}" not found`);
+    throw new Error(`Team with key "${key}" not found`)
   }
-  return data.teams.nodes[0].id;
+  return data.teams.nodes[0].id
 }
 
-export async function resolveStateId(
-  teamId: string,
-  stateName: string,
-): Promise<string> {
+export async function resolveStateId(teamId: string, stateName: string): Promise<string> {
   const data = await graphql<{
-    team: { states: { nodes: { id: string; name: string }[] } };
+    team: { states: { nodes: { id: string; name: string }[] } }
   }>(
-    `query($teamId: String!) {
-      team(id: $teamId) {
-        states { nodes { id name } }
+    `
+      query ($teamId: String!) {
+        team(id: $teamId) {
+          states {
+            nodes {
+              id
+              name
+            }
+          }
+        }
       }
-    }`,
+    `,
     { teamId },
-  );
+  )
 
-  const lowerName = stateName.toLowerCase();
-  const match = data.team.states.nodes.find(
-    (s) => s.name.toLowerCase() === lowerName,
-  );
+  const lowerName = stateName.toLowerCase()
+  const match = data.team.states.nodes.find((s) => s.name.toLowerCase() === lowerName)
 
   if (!match) {
-    const available = data.team.states.nodes.map((s) => s.name).join(", ");
-    throw new Error(
-      `Workflow state "${stateName}" not found. Available states: ${available}`,
-    );
+    const available = data.team.states.nodes.map((s) => s.name).join(', ')
+    throw new Error(`Workflow state "${stateName}" not found. Available states: ${available}`)
   }
-  return match.id;
+  return match.id
 }
 
 export async function resolveUserId(nameOrEmail: string): Promise<string> {
   const data = await graphql<{
-    users: { nodes: { id: string }[] };
+    users: { nodes: { id: string }[] }
   }>(
-    `query($term: String!) {
-      users(filter: { or: [{ name: { eqIgnoreCase: $term } }, { email: { eq: $term } }] }) {
-        nodes { id }
+    `
+      query ($term: String!) {
+        users(filter: { or: [{ name: { eqIgnoreCase: $term } }, { email: { eq: $term } }] }) {
+          nodes {
+            id
+          }
+        }
       }
-    }`,
+    `,
     { term: nameOrEmail },
-  );
+  )
 
   if (data.users.nodes.length === 0) {
-    throw new Error(`User "${nameOrEmail}" not found`);
+    throw new Error(`User "${nameOrEmail}" not found`)
   }
-  return data.users.nodes[0].id;
+  return data.users.nodes[0].id
 }
 
-export async function resolveLabelIds(
-  teamId: string,
-  names: string[],
-): Promise<string[]> {
+export async function resolveLabelIds(teamId: string, names: string[]): Promise<string[]> {
   const data = await graphql<{
-    team: { labels: { nodes: { id: string; name: string }[] } };
+    team: { labels: { nodes: { id: string; name: string }[] } }
   }>(
-    `query($teamId: String!) {
-      team(id: $teamId) {
-        labels { nodes { id name } }
+    `
+      query ($teamId: String!) {
+        team(id: $teamId) {
+          labels {
+            nodes {
+              id
+              name
+            }
+          }
+        }
       }
-    }`,
+    `,
     { teamId },
-  );
+  )
 
-  const labelMap = new Map(
-    data.team.labels.nodes.map((l) => [l.name.toLowerCase(), l.id]),
-  );
+  const labelMap = new Map(data.team.labels.nodes.map((l) => [l.name.toLowerCase(), l.id]))
 
-  const ids: string[] = [];
+  const ids: string[] = []
   for (const name of names) {
-    const id = labelMap.get(name.toLowerCase());
+    const id = labelMap.get(name.toLowerCase())
     if (!id) {
-      throw new Error(`Label "${name}" not found in team`);
+      throw new Error(`Label "${name}" not found in team`)
     }
-    ids.push(id);
+    ids.push(id)
   }
-  return ids;
+  return ids
 }
 
 export async function resolveProjectId(name: string): Promise<string> {
   const data = await graphql<{
-    projects: { nodes: { id: string; name: string }[] };
+    projects: { nodes: { id: string; name: string }[] }
   }>(
-    `query($name: String!) {
-      projects(filter: { name: { eqIgnoreCase: $name } }) {
-        nodes { id name }
+    `
+      query ($name: String!) {
+        projects(filter: { name: { eqIgnoreCase: $name } }) {
+          nodes {
+            id
+            name
+          }
+        }
       }
-    }`,
+    `,
     { name },
-  );
+  )
 
   if (data.projects.nodes.length === 0) {
-    throw new Error(`Project "${name}" not found`);
+    throw new Error(`Project "${name}" not found`)
   }
-  return data.projects.nodes[0].id;
+  return data.projects.nodes[0].id
 }

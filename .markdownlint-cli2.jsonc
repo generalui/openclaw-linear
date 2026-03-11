@@ -1,0 +1,14 @@
+{
+  "config": {
+    "default": true,
+    "first-line-h1": false,
+    "line-length": {
+      "line_length": 280,
+    },
+    "no-inline-html": {
+      "allowed_elements": ["a", "br", "div", "h1", "img", "p"],
+    },
+    "table-column-style": false,
+  },
+  "ignores": ["**/node_modules/**"],
+}

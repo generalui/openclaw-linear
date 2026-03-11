@@ -4,20 +4,25 @@ about: Report something that isn't working
 labels: bug
 ---
 
-**Describe the bug**
+### Describe the bug
+
 A clear description of what's going wrong.
 
-**Steps to reproduce**
+### Steps to reproduce
+
 1. ...
 2. ...
 
-**Expected behavior**
+### Expected behavior
+
 What you expected to happen.
 
-**Environment**
+### Environment
+
 - Node version:
 - openclaw-linear version:
 - OS:
 
-**Additional context**
+### Additional context
+
 Logs, screenshots, or anything else that might help.

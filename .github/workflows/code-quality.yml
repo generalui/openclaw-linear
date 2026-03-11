@@ -1,0 +1,157 @@
+name: Code Quality
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'package.json'
+      - 'tsconfig*'
+      - 'vitest*'
+      - '.eslint*'
+      - 'eslint*'
+      - '.prettier*'
+      - '.markdownlint*'
+      - '.github/workflows/code-quality.yml'
+  workflow_dispatch:
+
+jobs:
+  quality:
+    name: Lint and test
+    # The linting and testing pipeline should never take more than 15 minutes.
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Get changed code quality workflow
+        id: changed-code-quality
+        uses: tj-actions/changed-files@v41
+        with:
+          files: |
+            .github/workflows/code-quality.yml
+
+      - name: Get changed markdown files
+        id: changed-markdown
+        uses: tj-actions/changed-files@v41
+        with:
+          files: |
+            .markdownlint*
+            **/*.md
+
+      - name: Get changed JavaScript project files
+        id: changed-js-project
+        uses: tj-actions/changed-files@v41
+        with:
+          files: |
+            .eslint*
+            eslint*
+            .prettier*
+            package.json
+            package-lock.json
+            tsconfig*
+            vitest*
+            src/**
+            test/**
+
+      - name: Should lint documentation
+        id: lint-docs
+        run: |
+          run=false
+          if [ "${{ steps.changed-markdown.outputs.any_modified }}" == 'true' ] || [ "${{ steps.changed-code-quality.outputs.any_modified }}" == 'true' ] || [ "${{ github.event.action }}" == 'workflow_dispatch' ]; then
+            run=true
+          fi
+          echo "run=${run}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Should run unit tests
+        id: check-js
+        run: |
+          run=false
+          if [ "${{ steps.changed-js-project.outputs.any_modified }}" == 'true' ] || [ "${{ steps.changed-code-quality.outputs.any_modified }}" == 'true' ] || [ "${{ github.event.action }}" == 'workflow_dispatch' ]; then
+            run=true
+          fi
+          echo "run=${run}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Lint all documentation
+        if: steps.lint-docs.outputs.run == 'true'
+        uses: DavidAnson/markdownlint-cli2-action@v22
+        with:
+          globs: |
+            **/*.md
+
+      - name: Setup Node JS
+        if: steps.check-js.outputs.run == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        if: steps.check-js.outputs.run == 'true'
+        run: npm ci
+        shell: bash
+
+      - name: Build project
+        if: steps.check-js.outputs.run == 'true'
+        run: npm run build
+        shell: bash
+
+      - name: Check formatting
+        if: steps.check-js.outputs.run == 'true'
+        run: npm run format:check
+        shell: bash
+
+      - name: Lint project
+        if: steps.check-js.outputs.run == 'true'
+        run: npm run lint:project
+        shell: bash
+
+      - name: Run unit tests
+        if: steps.check-js.outputs.run == 'true'
+        id: run-unit-tests
+        run: npm run test:coverage
+        continue-on-error: true
+        shell: bash
+
+      - name: Get the coverage file
+        if: steps.check-js.outputs.run == 'true'
+        run: |
+          branch="${{ github.head_ref }}"
+          coverage_branch="${branch//[\":<>|*?\\\/]/-}"
+          coverage_dir="coverage-${coverage_branch}"
+          mkdir -p "${coverage_dir}" && sudo cp -r coverage "${coverage_dir}"
+
+          echo "coverage_branch=${coverage_branch}" >> $GITHUB_OUTPUT
+          echo "coverage_dir=${coverage_dir}" >> $GITHUB_OUTPUT
+        shell: bash
+        id: coverage
+
+      - name: Upload the coverage as an artifact
+        if: steps.check-js.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.coverage.outputs.coverage_branch }}-test-coverage
+          path: ${{ steps.coverage.outputs.coverage_dir }}
+          retention-days: 30
+
+      - name: Check if unit tests failed
+        if: steps.check-js.outputs.run == 'true'
+        run: |
+          if [ "${{ steps.run-unit-tests.outcome }}" == "failure" ]; then
+            echo "Unit tests failed."
+            exit 1
+          fi
+        shell: bash
+
+      - name: Default job success
+        if: steps.lint-docs.outputs.run == 'false' && steps.check-js.outputs.run == 'false'
+        run: exit 0
