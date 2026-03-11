@@ -240,6 +240,23 @@ Issues are referenced by human-readable identifiers (e.g. `ENG-123`). Names are 
 
 Relation types: `blocks`, `blocked-by`, `related`, `duplicate`.
 
+### `linear_view` — custom views
+
+| Action | Required | Optional |
+|--------|----------|----------|
+| `list` | — | — |
+| `get` | `viewId` | — |
+| `create` | `name` | `description`, `icon`, `color`, `filterData`, `shared` |
+| `update` | `viewId` | `name`, `description`, `icon`, `color`, `filterData`, `shared` |
+| `delete` | `viewId` | — |
+
+`filterData` is a JSON string in Linear's issue filter format (e.g. `{"and":[{"project":{"id":{"in":["<project-id>"]}}}]}`).
+
+> **Limitation:** The Linear API only controls *which* issues a view shows — not *how* they are displayed.
+> Grouping (e.g. by parent issue / epic, by status), ordering, and layout (list vs. board) are
+> UI-level preferences managed in the Linear app and cannot be set via the API.
+> To group a view by epic and status, open the view in Linear and use the **Group** toolbar option.
+
 ## Routed Events
 
 | Linear Event | Router Action | Agent Event |
