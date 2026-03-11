@@ -22,6 +22,24 @@ Thanks for your interest in contributing to openclaw-linear!
 3. Describe what you changed and why
 4. Link any related issues
 
+## Code Quality
+
+This project enforces consistent code style and quality through automated tooling.
+All checks run automatically in CI on pull requests to `main`.
+
+- **[Linting and Formatting](documentation/LINTING.md)** — ESLint, Prettier, and markdownlint rules,
+  configuration, and how to run them locally.
+- **[Testing](documentation/TESTING.md)** — Test structure, how to run tests, and guidelines for
+  writing new ones.
+
+To run all checks locally:
+
+```bash
+npm run lint        # ESLint + markdownlint
+npm run format:check  # Prettier
+npm test            # Vitest
+```
+
 ## Reporting Bugs
 
 Use the [bug report template](https://github.com/nichochar/openclaw-linear/issues/new?template=bug_report.md) and include steps to reproduce.
