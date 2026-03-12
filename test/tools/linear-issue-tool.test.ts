@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock('../../src/linear-api.js', () => ({
+vi.mock("../../src/linear-api.js", () => ({
   graphql: vi.fn(),
   resolveIssueId: vi.fn(),
   resolveTeamId: vi.fn(),
@@ -8,359 +8,370 @@ vi.mock('../../src/linear-api.js', () => ({
   resolveUserId: vi.fn(),
   resolveLabelIds: vi.fn(),
   resolveProjectId: vi.fn(),
-}))
+}));
 
-const { graphql, resolveIssueId, resolveTeamId, resolveStateId, resolveUserId, resolveLabelIds, resolveProjectId } =
-  await import('../../src/linear-api.js')
-const { createIssueTool } = await import('../../src/tools/linear-issue-tool.js')
+const {
+  graphql,
+  resolveIssueId,
+  resolveTeamId,
+  resolveStateId,
+  resolveUserId,
+  resolveLabelIds,
+  resolveProjectId,
+} = await import("../../src/linear-api.js");
+const { createIssueTool } =
+  await import("../../src/tools/linear-issue-tool.js");
 
-const mockedGraphql = vi.mocked(graphql)
-const mockedResolveIssueId = vi.mocked(resolveIssueId)
-const mockedResolveTeamId = vi.mocked(resolveTeamId)
-const mockedResolveStateId = vi.mocked(resolveStateId)
-const mockedResolveUserId = vi.mocked(resolveUserId)
-const mockedResolveLabelIds = vi.mocked(resolveLabelIds)
-const mockedResolveProjectId = vi.mocked(resolveProjectId)
+const mockedGraphql = vi.mocked(graphql);
+const mockedResolveIssueId = vi.mocked(resolveIssueId);
+const mockedResolveTeamId = vi.mocked(resolveTeamId);
+const mockedResolveStateId = vi.mocked(resolveStateId);
+const mockedResolveUserId = vi.mocked(resolveUserId);
+const mockedResolveLabelIds = vi.mocked(resolveLabelIds);
+const mockedResolveProjectId = vi.mocked(resolveProjectId);
 
 function parse(result: { content: { type: string; text?: string }[] }) {
-  const text = result.content.find((c) => c.type === 'text')?.text
-  return text ? JSON.parse(text) : undefined
+  const text = result.content.find((c) => c.type === "text")?.text;
+  return text ? JSON.parse(text) : undefined;
+}
+
+function getMutationInput(callIndex = 0): Record<string, unknown> {
+  return (
+    mockedGraphql.mock.calls[callIndex][1] as { input: Record<string, unknown> }
+  ).input;
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
-})
+  vi.clearAllMocks();
+});
 
-describe('linear_issue tool', () => {
-  it('has correct name', () => {
-    const tool = createIssueTool()
-    expect(tool.name).toBe('linear_issue')
-  })
+describe("linear_issue tool", () => {
+  describe("view", () => {
+    it("resolves identifier and fetches full issue details", async () => {
+      mockedResolveIssueId.mockResolvedValue("uuid-42");
+      mockedGraphql.mockResolvedValue({
+        issue: {
+          id: "uuid-42",
+          identifier: "ENG-42",
+          title: "Fix bug",
+          state: { name: "Todo" },
+        },
+      });
 
-  describe('view', () => {
-    it('returns issue details', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
-      const issue = {
-        id: 'uuid-1',
-        identifier: 'ENG-42',
-        title: 'Fix bug',
-        state: { name: 'Todo' },
-      }
-      mockedGraphql.mockResolvedValue({ issue })
+      const data = parse(
+        await createIssueTool().execute("call-1", {
+          action: "view",
+          issueId: "ENG-42",
+        }),
+      );
 
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'view',
-        issueId: 'ENG-42',
-      })
-      const data = parse(result)
-      expect(data.identifier).toBe('ENG-42')
-      expect(data.title).toBe('Fix bug')
-    })
+      expect(mockedResolveIssueId).toHaveBeenCalledWith("ENG-42");
+      expect(data.identifier).toBe("ENG-42");
+      expect(data.title).toBe("Fix bug");
+    });
 
-    it('returns error without issueId', async () => {
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', { action: 'view' })
-      const data = parse(result)
-      expect(data.error).toContain('issueId is required')
-    })
-  })
+    it("returns error without issueId", async () => {
+      const data = parse(
+        await createIssueTool().execute("call-1", { action: "view" }),
+      );
+      expect(data.error).toContain("issueId is required");
+    });
+  });
 
-  describe('list', () => {
-    it('returns filtered issues', async () => {
+  describe("list", () => {
+    it("applies no filter and defaults limit to 50 when called with no params", async () => {
+      mockedGraphql.mockResolvedValue({ issues: { nodes: [] } });
+
+      await createIssueTool().execute("call-1", { action: "list" });
+
+      const vars = mockedGraphql.mock.calls[0][1] as Record<string, unknown>;
+      expect(vars.first).toBe(50);
+      expect(vars.state).toBeUndefined();
+      expect(vars.assignee).toBeUndefined();
+      expect(vars.team).toBeUndefined();
+      expect(vars.project).toBeUndefined();
+    });
+
+    it("passes state, team, assignee, and project as query variables", async () => {
+      mockedGraphql.mockResolvedValue({ issues: { nodes: [] } });
+
+      await createIssueTool().execute("call-1", {
+        action: "list",
+        state: "In Progress",
+        team: "eng",
+        assignee: "alice@example.com",
+        project: "Alpha",
+        limit: 10,
+      });
+
+      const vars = mockedGraphql.mock.calls[0][1] as Record<string, unknown>;
+      expect(vars.state).toBe("In Progress");
+      expect(vars.team).toBe("ENG"); // uppercased
+      expect(vars.assignee).toBe("alice@example.com");
+      expect(vars.project).toBe("Alpha");
+      expect(vars.first).toBe(10);
+    });
+
+    it("returns the issues from the API", async () => {
       mockedGraphql.mockResolvedValue({
         issues: {
           nodes: [
-            { id: 'i1', identifier: 'ENG-1', title: 'Task 1' },
-            { id: 'i2', identifier: 'ENG-2', title: 'Task 2' },
+            { id: "i1", identifier: "ENG-1", title: "Task 1" },
+            { id: "i2", identifier: "ENG-2", title: "Task 2" },
           ],
         },
-      })
+      });
 
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'list',
-        state: 'In Progress',
-        team: 'ENG',
-      })
-      const data = parse(result)
-      expect(data.issues).toHaveLength(2)
-    })
+      const data = parse(
+        await createIssueTool().execute("call-1", { action: "list" }),
+      );
+      expect(data.issues).toHaveLength(2);
+      expect(data.issues[0].identifier).toBe("ENG-1");
+    });
+  });
 
-    it('lists without filters', async () => {
-      mockedGraphql.mockResolvedValue({
-        issues: { nodes: [] },
-      })
-
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', { action: 'list' })
-      const data = parse(result)
-      expect(data.issues).toEqual([])
-    })
-  })
-
-  describe('create', () => {
-    it('creates an issue with all fields', async () => {
-      mockedResolveTeamId.mockResolvedValue('team-1')
-      mockedResolveStateId.mockResolvedValue('state-1')
-      mockedResolveUserId.mockResolvedValue('user-1')
-      mockedResolveProjectId.mockResolvedValue('proj-1')
-      mockedResolveIssueId.mockResolvedValue('parent-uuid')
-      mockedResolveLabelIds.mockResolvedValue(['label-1'])
+  describe("create", () => {
+    it("composes mutation input correctly from all resolved fields", async () => {
+      mockedResolveTeamId.mockResolvedValue("team-uuid");
+      mockedResolveStateId.mockResolvedValue("state-uuid");
+      mockedResolveUserId.mockResolvedValue("user-uuid");
+      mockedResolveProjectId.mockResolvedValue("proj-uuid");
+      mockedResolveIssueId.mockResolvedValue("parent-uuid");
+      mockedResolveLabelIds.mockResolvedValue(["label-uuid"]);
       mockedGraphql.mockResolvedValue({
         issueCreate: {
           success: true,
           issue: {
-            id: 'new-id',
-            identifier: 'ENG-100',
-            url: 'https://linear.app/eng/issue/ENG-100',
-            title: 'New issue',
+            id: "new",
+            identifier: "ENG-100",
+            url: "u",
+            title: "New issue",
           },
         },
-      })
+      });
 
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'create',
-        title: 'New issue',
-        description: 'Details',
-        team: 'ENG',
-        state: 'Todo',
-        assignee: 'Alice',
-        project: 'Alpha',
-        parent: 'ENG-50',
-        labels: ['Bug'],
+      await createIssueTool().execute("call-1", {
+        action: "create",
+        title: "New issue",
+        description: "Details here",
+        team: "ENG",
+        state: "Todo",
+        assignee: "Alice",
+        project: "Alpha",
+        parent: "ENG-50",
+        labels: ["Bug"],
         priority: 2,
-      })
-      const data = parse(result)
-      expect(data.success).toBe(true)
-      expect(data.issue.identifier).toBe('ENG-100')
-    })
+        dueDate: "2026-06-01",
+      });
 
-    it('returns error without title', async () => {
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', { action: 'create' })
-      const data = parse(result)
-      expect(data.error).toContain('title is required')
-    })
+      // Verify resolvers called with correct args
+      expect(mockedResolveTeamId).toHaveBeenCalledWith("ENG");
+      expect(mockedResolveStateId).toHaveBeenCalledWith("team-uuid", "Todo");
+      expect(mockedResolveUserId).toHaveBeenCalledWith("Alice");
+      expect(mockedResolveProjectId).toHaveBeenCalledWith("Alpha");
+      expect(mockedResolveIssueId).toHaveBeenCalledWith("ENG-50");
+      expect(mockedResolveLabelIds).toHaveBeenCalledWith("team-uuid", ["Bug"]);
 
-    it('fetches default team when none specified', async () => {
-      mockedGraphql.mockResolvedValueOnce({ teams: { nodes: [{ id: 'default-team' }] } }).mockResolvedValueOnce({
-        issueCreate: {
-          success: true,
-          issue: { id: 'x', identifier: 'T-1', url: 'u', title: 'T' },
-        },
-      })
+      // Verify the mutation input
+      const input = getMutationInput();
+      expect(input.title).toBe("New issue");
+      expect(input.teamId).toBe("team-uuid");
+      expect(input.description).toBe("Details here");
+      expect(input.priority).toBe(2);
+      expect(input.stateId).toBe("state-uuid");
+      expect(input.assigneeId).toBe("user-uuid");
+      expect(input.projectId).toBe("proj-uuid");
+      expect(input.parentId).toBe("parent-uuid");
+      expect(input.labelIds).toEqual(["label-uuid"]);
+      expect(input.dueDate).toBe("2026-06-01");
+    });
 
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'create',
-        title: 'Minimal',
-      })
-      const data = parse(result)
-      expect(data.success).toBe(true)
-    })
-  })
-
-  describe('update', () => {
-    it('updates issue fields', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
-      mockedGraphql.mockResolvedValueOnce({ issue: { team: { id: 'team-1' } } }).mockResolvedValueOnce({
-        issueUpdate: {
-          success: true,
-          issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Updated' },
-        },
-      })
-      mockedResolveStateId.mockResolvedValue('state-done')
-
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'update',
-        issueId: 'ENG-42',
-        state: 'Done',
-        title: 'Updated',
-      })
-      const data = parse(result)
-      expect(data.success).toBe(true)
-    })
-
-    it('returns error without issueId', async () => {
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'update',
-        title: 'No ID',
-      })
-      const data = parse(result)
-      expect(data.error).toContain('issueId is required')
-    })
-
-    it('appends to existing description when appendDescription is true', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
+    it("fetches first available team when none specified", async () => {
       mockedGraphql
-        // First call: fetch team + existing description
-        .mockResolvedValueOnce({ issue: { team: { id: 'team-1' }, description: 'Original content.' } })
-        // Second call: the update mutation
+        .mockResolvedValueOnce({ teams: { nodes: [{ id: "default-team" }] } })
+        .mockResolvedValueOnce({
+          issueCreate: {
+            success: true,
+            issue: { id: "x", identifier: "T-1", url: "u", title: "T" },
+          },
+        });
+
+      await createIssueTool().execute("call-1", {
+        action: "create",
+        title: "Minimal",
+      });
+
+      const input = getMutationInput(1);
+      expect(input.teamId).toBe("default-team");
+    });
+
+    it("returns error without title", async () => {
+      const data = parse(
+        await createIssueTool().execute("call-1", { action: "create" }),
+      );
+      expect(data.error).toContain("title is required");
+    });
+
+    it("returns error when no teams exist in workspace", async () => {
+      mockedGraphql.mockResolvedValueOnce({ teams: { nodes: [] } });
+      const data = parse(
+        await createIssueTool().execute("call-1", {
+          action: "create",
+          title: "Orphaned",
+        }),
+      );
+      expect(data.error).toContain("No teams found");
+    });
+  });
+
+  describe("update", () => {
+    it("appends description when appendDescription is true with existing content", async () => {
+      mockedResolveIssueId.mockResolvedValue("uuid-1");
+      mockedGraphql
+        .mockResolvedValueOnce({
+          issue: { team: { id: "team-1" }, description: "Original" },
+        })
         .mockResolvedValueOnce({
           issueUpdate: {
             success: true,
-            issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' },
+            issue: { id: "uuid-1", identifier: "ENG-42", title: "T" },
           },
-        })
+        });
 
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'update',
-        issueId: 'ENG-42',
-        description: 'Appended note.',
+      await createIssueTool().execute("call-1", {
+        action: "update",
+        issueId: "ENG-42",
+        description: "Appended",
         appendDescription: true,
-      })
-      const data = parse(result)
-      expect(data.success).toBe(true)
+      });
 
-      // Verify the mutation was called with the concatenated description
-      const mutationCall = mockedGraphql.mock.calls[1] as [string, Record<string, unknown>]
-      const input = mutationCall[1].input as Record<string, string>
-      expect(input.description).toBe('Original content.\n\nAppended note.')
-    })
+      const vars = mockedGraphql.mock.calls[1][1] as {
+        input: Record<string, unknown>;
+      };
+      expect(vars.input.description).toBe("Original\n\nAppended");
+    });
 
-    it('sets description directly (no append) when appendDescription is false', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
-      mockedGraphql.mockResolvedValueOnce({
+    it("sets description directly when appendDescription is true but existing is empty", async () => {
+      mockedResolveIssueId.mockResolvedValue("uuid-1");
+      mockedGraphql
+        .mockResolvedValueOnce({
+          issue: { team: { id: "team-1" }, description: null },
+        })
+        .mockResolvedValueOnce({
+          issueUpdate: {
+            success: true,
+            issue: { id: "uuid-1", identifier: "ENG-42", title: "T" },
+          },
+        });
+
+      await createIssueTool().execute("call-1", {
+        action: "update",
+        issueId: "ENG-42",
+        description: "Fresh",
+        appendDescription: true,
+      });
+
+      const vars = mockedGraphql.mock.calls[1][1] as {
+        input: Record<string, unknown>;
+      };
+      expect(vars.input.description).toBe("Fresh");
+    });
+
+    it("clears dueDate when empty string is passed", async () => {
+      mockedResolveIssueId.mockResolvedValue("uuid-1");
+      mockedGraphql.mockResolvedValue({
         issueUpdate: {
           success: true,
-          issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' },
+          issue: { id: "uuid-1", identifier: "ENG-42", title: "T" },
         },
-      })
+      });
 
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'update',
-        issueId: 'ENG-42',
-        description: 'Replacement description.',
-      })
-      const data = parse(result)
-      expect(data.success).toBe(true)
+      await createIssueTool().execute("call-1", {
+        action: "update",
+        issueId: "ENG-42",
+        dueDate: "",
+      });
 
-      // Only one graphql call (no fetch for existing description)
-      expect(mockedGraphql).toHaveBeenCalledOnce()
-      const call = mockedGraphql.mock.calls[0] as [string, Record<string, unknown>]
-      const input = call[1].input as Record<string, string>
-      expect(input.description).toBe('Replacement description.')
-    })
+      const vars = mockedGraphql.mock.calls[0][1] as {
+        input: Record<string, unknown>;
+      };
+      expect(vars.input.dueDate).toBeNull();
+    });
 
-    it('appends to empty description when existing description is absent', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
+    it("resolves labels against the issue team", async () => {
+      mockedResolveIssueId.mockResolvedValue("uuid-1");
+      mockedResolveLabelIds.mockResolvedValue(["label-bug"]);
       mockedGraphql
-        .mockResolvedValueOnce({ issue: { team: { id: 'team-1' }, description: undefined } })
         .mockResolvedValueOnce({
-          issueUpdate: { success: true, issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' } },
+          issue: { team: { id: "team-eng" }, description: null },
         })
+        .mockResolvedValueOnce({
+          issueUpdate: {
+            success: true,
+            issue: { id: "uuid-1", identifier: "ENG-42", title: "T" },
+          },
+        });
 
-      const tool = createIssueTool()
-      await tool.execute('call-1', {
-        action: 'update',
-        issueId: 'ENG-42',
-        description: 'First note.',
-        appendDescription: true,
-      })
+      await createIssueTool().execute("call-1", {
+        action: "update",
+        issueId: "ENG-42",
+        labels: ["Bug"],
+      });
 
-      const mutationCall = mockedGraphql.mock.calls[1] as [string, Record<string, unknown>]
-      const input = mutationCall[1].input as Record<string, string>
-      // No prefix when existing description is empty
-      expect(input.description).toBe('First note.')
-    })
+      expect(mockedResolveLabelIds).toHaveBeenCalledWith("team-eng", ["Bug"]);
+      const vars = mockedGraphql.mock.calls[1][1] as {
+        input: Record<string, unknown>;
+      };
+      expect(vars.input.labelIds).toEqual(["label-bug"]);
+    });
 
-    it('updates labels via resolveLabelIds', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
-      mockedResolveLabelIds.mockResolvedValue(['label-bug', 'label-feat'])
-      mockedGraphql.mockResolvedValueOnce({ issue: { team: { id: 'team-1' } } }).mockResolvedValueOnce({
-        issueUpdate: { success: true, issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' } },
-      })
+    it("returns error without issueId", async () => {
+      const data = parse(
+        await createIssueTool().execute("call-1", {
+          action: "update",
+          title: "No ID",
+        }),
+      );
+      expect(data.error).toContain("issueId is required");
+    });
+  });
 
-      const tool = createIssueTool()
-      await tool.execute('call-1', {
-        action: 'update',
-        issueId: 'ENG-42',
-        labels: ['Bug', 'Feature'],
-      })
+  describe("delete", () => {
+    it("resolves identifier and sends delete mutation", async () => {
+      mockedResolveIssueId.mockResolvedValue("uuid-42");
+      mockedGraphql.mockResolvedValue({ issueDelete: { success: true } });
 
-      expect(mockedResolveLabelIds).toHaveBeenCalledWith('team-1', ['Bug', 'Feature'])
+      const data = parse(
+        await createIssueTool().execute("call-1", {
+          action: "delete",
+          issueId: "ENG-42",
+        }),
+      );
 
-      const mutationCall = mockedGraphql.mock.calls[1] as [string, Record<string, unknown>]
-      const input = mutationCall[1].input as Record<string, unknown>
-      expect(input.labelIds).toEqual(['label-bug', 'label-feat'])
-    })
+      expect(mockedResolveIssueId).toHaveBeenCalledWith("ENG-42");
+      const vars = mockedGraphql.mock.calls[0][1] as { id: string };
+      expect(vars.id).toBe("uuid-42");
+      expect(data.success).toBe(true);
+      expect(data.issueId).toBe("ENG-42");
+    });
 
-    it('clears dueDate when empty string is passed', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
-      mockedGraphql.mockResolvedValueOnce({
-        issueUpdate: { success: true, issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' } },
-      })
+    it("returns error without issueId", async () => {
+      const data = parse(
+        await createIssueTool().execute("call-1", { action: "delete" }),
+      );
+      expect(data.error).toContain("issueId is required");
+    });
+  });
 
-      const tool = createIssueTool()
-      await tool.execute('call-1', {
-        action: 'update',
-        issueId: 'ENG-42',
-        dueDate: '',
-      })
+  it("surfaces API errors as structured error response rather than throwing", async () => {
+    mockedResolveIssueId.mockRejectedValue(new Error("Network failure"));
 
-      const call = mockedGraphql.mock.calls[0] as [string, Record<string, unknown>]
-      const input = call[1].input as Record<string, unknown>
-      expect(input.dueDate).toBeNull()
-    })
-
-    it('sets dueDate when a date string is passed', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
-      mockedGraphql.mockResolvedValueOnce({
-        issueUpdate: { success: true, issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'Task' } },
-      })
-
-      const tool = createIssueTool()
-      await tool.execute('call-1', {
-        action: 'update',
-        issueId: 'ENG-42',
-        dueDate: '2026-03-18',
-      })
-
-      const call = mockedGraphql.mock.calls[0] as [string, Record<string, unknown>]
-      const input = call[1].input as Record<string, unknown>
-      expect(input.dueDate).toBe('2026-03-18')
-    })
-  })
-
-  describe('delete', () => {
-    it('deletes an issue', async () => {
-      mockedResolveIssueId.mockResolvedValue('uuid-1')
-      mockedGraphql.mockResolvedValue({
-        issueDelete: { success: true },
-      })
-
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', {
-        action: 'delete',
-        issueId: 'ENG-42',
-      })
-      const data = parse(result)
-      expect(data.success).toBe(true)
-    })
-
-    it('returns error without issueId', async () => {
-      const tool = createIssueTool()
-      const result = await tool.execute('call-1', { action: 'delete' })
-      const data = parse(result)
-      expect(data.error).toContain('issueId is required')
-    })
-  })
-
-  it('catches and returns errors from the API', async () => {
-    mockedResolveIssueId.mockRejectedValue(new Error('Network failure'))
-
-    const tool = createIssueTool()
-    const result = await tool.execute('call-1', {
-      action: 'view',
-      issueId: 'ENG-1',
-    })
-    const data = parse(result)
-    expect(data.error).toContain('Network failure')
-  })
-})
+    const data = parse(
+      await createIssueTool().execute("call-1", {
+        action: "view",
+        issueId: "ENG-1",
+      }),
+    );
+    expect(data.error).toContain("Network failure");
+  });
+});
