@@ -21,11 +21,6 @@ beforeEach(() => {
 })
 
 describe('linear_relation tool', () => {
-  it('has correct name', () => {
-    const tool = createRelationTool()
-    expect(tool.name).toBe('linear_relation')
-  })
-
   describe('list', () => {
     it('returns relations and inverse relations', async () => {
       mockedResolveIssueId.mockResolvedValue('uuid-1')

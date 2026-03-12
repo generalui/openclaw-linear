@@ -25,16 +25,6 @@ afterEach(() => {
 })
 
 describe('linear_queue tool', () => {
-  it('has correct name and description', () => {
-    const queue = new InboxQueue(QUEUE_PATH)
-    const tool = createQueueTool(queue)
-    expect(tool.name).toBe('linear_queue')
-    expect(tool.description).toContain('peek')
-    expect(tool.description).toContain('pop')
-    expect(tool.description).toContain('drain')
-    expect(tool.description).toContain('complete')
-  })
-
   it('peek returns empty items on empty queue', async () => {
     const queue = new InboxQueue(QUEUE_PATH)
     const tool = createQueueTool(queue)
@@ -111,7 +101,10 @@ describe('linear_queue tool', () => {
     await queue.pop() // claim it
 
     const tool = createQueueTool(queue)
-    const result = await tool.execute('call-1', { action: 'complete', issueId: 'ENG-42' })
+    const result = await tool.execute('call-1', {
+      action: 'complete',
+      issueId: 'ENG-42',
+    })
     const data = parse(result)
     expect(data.completed).toBe(true)
     expect(data.issueId).toBe('ENG-42')

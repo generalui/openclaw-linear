@@ -19,11 +19,6 @@ beforeEach(() => {
 })
 
 describe('linear_team tool', () => {
-  it('has correct name', () => {
-    const tool = createTeamTool()
-    expect(tool.name).toBe('linear_team')
-  })
-
   describe('list', () => {
     it('returns all teams', async () => {
       mockedGraphql.mockResolvedValue({

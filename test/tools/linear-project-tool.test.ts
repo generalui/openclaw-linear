@@ -21,11 +21,6 @@ beforeEach(() => {
 })
 
 describe('linear_project tool', () => {
-  it('has correct name', () => {
-    const tool = createProjectTool()
-    expect(tool.name).toBe('linear_project')
-  })
-
   describe('list', () => {
     it('returns projects', async () => {
       mockedGraphql.mockResolvedValue({

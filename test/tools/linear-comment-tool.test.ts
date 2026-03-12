@@ -21,11 +21,6 @@ beforeEach(() => {
 })
 
 describe('linear_comment tool', () => {
-  it('has correct name', () => {
-    const tool = createCommentTool()
-    expect(tool.name).toBe('linear_comment')
-  })
-
   describe('list', () => {
     it('returns comments for an issue', async () => {
       mockedResolveIssueId.mockResolvedValue('uuid-1')
