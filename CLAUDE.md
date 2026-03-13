@@ -1,6 +1,13 @@
 # CLAUDE.md — openclaw-linear
 
-Linear integration plugin for [OpenClaw](https://github.com/nichochar/openclaw). Receives Linear webhook events, routes them through a persistent work queue, and exposes tools for agents to manage issues, comments, projects, teams, relations, and views via the Linear GraphQL API.
+OpenClaw plugin that integrates [Linear](https://linear.app) into an AI agent workflow. It receives
+Linear webhook events (issues, comments), routes them through a debounced persistent work queue,
+and dispatches the agent to triage. The agent uses the plugin's MCP-style tools to read and act on
+Linear data — creating issues, leaving comments, managing projects, and so on.
+
+For setup, build, and contribution guidance: see [CONTRIBUTING.md](./CONTRIBUTING.md).
+For linting and formatting: see [documentation/LINTING.md](./documentation/LINTING.md).
+For testing conventions: see [documentation/TESTING.md](./documentation/TESTING.md).
 
 ## Repo Structure
 
@@ -10,7 +17,7 @@ src/
   linear-api.ts         # GraphQL client + resolver helpers (resolveTeamId, resolveStateId, etc.)
   webhook-handler.ts    # HTTP handler: HMAC verification, body parsing, duplicate delivery detection
   event-router.ts       # Maps raw Linear webhook payloads to RouterAction objects (wake/notify)
-  work-queue.ts         # JSONL-backed persistent inbox queue with mutex, dedup, and recovery
+  work-queue.ts         # JSONL-backed persistent inbox queue with mutex, dedup, and crash recovery
   tools/
     linear-issue-tool.ts    # linear_issue: view/list/create/update/delete
     linear-comment-tool.ts  # linear_comment: list/add/update
@@ -20,15 +27,16 @@ src/
     linear-view-tool.ts     # linear_view: list/get/create/update/delete
     queue-tool.ts           # linear_queue: peek/pop/drain/complete
 test/
-  tools/                # Unit tests per tool — one file per src/tools/ file
+  tools/                # Unit tests per tool — mirrors src/tools/ one-to-one
   event-router.test.ts
   linear-api.test.ts
   webhook-handler.test.ts
   work-queue.test.ts
   format-consolidated-message.test.ts
 documentation/
-  LINTING.md
-  TESTING.md
+  CONTRIBUTING.md       # (root-level, symlinked) build, install, PR process
+  LINTING.md            # ESLint, Prettier, markdownlint — config and commands
+  TESTING.md            # Vitest — structure, commands, writing guidelines
 ```
 
 ## Architecture
@@ -37,14 +45,15 @@ documentation/
 
 ```text
 Linear webhook → webhook-handler (HMAC verify, dedup)
-  → event-router (filter by team/event/agentMapping, map to RouterAction)
+  → event-router (filter by team/event/agentMapping → RouterAction)
     → debouncer (batch window, default 30s)
       → dispatchConsolidatedActions → InboxQueue.enqueue + agent dispatch
 ```
 
-### Tool → Action Dispatch Pattern
+### Tool / Action Dispatch Pattern
 
-Every tool follows the same shape:
+Every tool follows the same shape — factory function, action-switched execute, errors always
+returned as structured JSON (never thrown):
 
 ```typescript
 export function createFooTool() {
@@ -52,79 +61,75 @@ export function createFooTool() {
     name: 'linear_foo',
     description: '...',
     inputSchema: { ... },
-    async execute(callId: string, params: Params): Promise<ToolResult> {
+    async execute(_callId: string, params: Params): Promise<ToolResult> {
       try {
         switch (params.action) {
-          case 'list': return jsonResult(await listFoo(params))
+          case 'list':   return jsonResult(await listFoo(params))
           case 'create': return jsonResult(await createFoo(params))
-          // ...
         }
       } catch (err) {
         return jsonResult({ error: formatErrorMessage(err) })
       }
-    }
+    },
   }
 }
 ```
 
-Tools **never throw** — errors are caught and returned as `{ error: string }` inside the `content` array.
+### Adding a New Tool — Checklist
 
-### Adding a New Tool
-
-1. Create `src/tools/linear-{name}-tool.ts` following the pattern above
-2. Export `create{Name}Tool()` — factory function, no constructor
+1. Create `src/tools/linear-{name}-tool.ts` using the pattern above
+2. Export `create{Name}Tool()` (factory, not a class)
 3. Register in `src/index.ts`: `api.registerTool(create{Name}Tool())`
-4. Create `test/tools/linear-{name}-tool.test.ts` — mock `../../src/linear-api.js`, test every action
-5. Export the tool name from the tool file (used in test assertions via `tool.name`)
+4. Add `test/tools/linear-{name}-tool.test.ts` — mock `../../src/linear-api.js`, test every action
+5. Update `README.md` if the tool has user-facing config implications
 
 ### linear-api.ts Resolvers
 
-All GraphQL mutations go through `graphql<T>(query, variables)`. Resolvers translate human-readable names → Linear UUIDs:
+`graphql<T>(query, variables)` is the base client. Resolvers translate human-readable names → Linear UUIDs
+before passing them to mutations:
 
-| Resolver | Args | Notes |
+| Resolver | Signature | Notes |
 |---|---|---|
-| `resolveTeamId(team)` | team key (e.g. `"ENG"`) | Case-insensitive match |
-| `resolveStateId(teamId, name)` | UUID, state name | Scoped to team |
-| `resolveUserId(nameOrEmail)` | display name or email | |
-| `resolveLabelIds(teamId, names[])` | UUID, label names | Returns `string[]` |
-| `resolveProjectId(name)` | project name | |
-| `resolveIssueId(identifier)` | e.g. `"ENG-42"` | Returns internal UUID |
+| `resolveTeamId` | `(team: string)` | Team key e.g. `"ENG"`, case-insensitive |
+| `resolveStateId` | `(teamId: string, name: string)` | UUID + state name, scoped to team |
+| `resolveUserId` | `(nameOrEmail: string)` | Display name or email |
+| `resolveLabelIds` | `(teamId: string, names: string[])` | Returns `string[]` |
+| `resolveProjectId` | `(name: string)` | Project name |
+| `resolveIssueId` | `(identifier: string)` | e.g. `"ENG-42"` → internal UUID |
 
 ### InboxQueue
 
-JSONL file at `~/.openclaw/extensions/openclaw-linear/queue/inbox.jsonl`. Items have states: `pending → in_progress → (removed)`. Write is atomic (temp file + rename). Mutex serialises all queue ops. Stale `in_progress` items are recovered on startup.
+Persistent JSONL file at `~/.openclaw/extensions/openclaw-linear/queue/inbox.jsonl`. Item lifecycle:
+`pending → in_progress → (removed)`. Writes are atomic (temp-file + rename). A mutex serialises
+all queue operations. Stale `in_progress` items from a previous crash are recovered on `activate`.
 
-## Code Style
+## Critical Conventions
 
-- **Formatter:** Prettier — `singleQuote: true`, `semi: false`, `trailingComma: 'all'`, `printWidth: 120`
-- **Linter:** ESLint (see `eslint.config.js`) — zero warnings in CI
-- Always run `npm run format:check` and `npm run lint:project` before committing
-- TypeScript strict mode; no `any` in production code without an eslint-disable comment
+### TypeScript Import Paths
 
-## Testing
+Always import with `.js` extensions, not `.ts` — this is an ESM project compiled by `tsc`:
 
-- **Runner:** Vitest (`npm test` or `npx vitest run`)
-- **Coverage:** `npm run test:coverage` (requires `@vitest/coverage-v8`)
-- **Pattern:** Each test file mocks `../../src/linear-api.js` entirely. Tests verify:
-  - GraphQL variables passed (the right UUIDs, the right filter vars)
-  - Mutation `input` object composition (all resolved IDs present)
-  - Error paths return `{ error: "..." }` rather than throwing
-- **Do not** test "has correct name" — that's a string literal, not logic
-- **Do not** test TypeScript-unreachable branches (e.g. `throw new Error("Unknown action")` after exhaustive switch)
-- `src/index.ts` is intentionally low coverage — it requires a full OpenClaw runtime harness
+```typescript
+import { graphql } from './linear-api.js'   // ✅
+import { graphql } from './linear-api.ts'   // ❌
+import { graphql } from './linear-api'      // ❌
+```
 
-See `documentation/TESTING.md` for full guidance.
+### src/index.ts Coverage
 
-## Versioning & Release
+`src/index.ts` is intentionally low on test coverage. It wires into the OpenClaw plugin runtime
+(`api.registerTool`, `api.on`, `api.registerHttpRoute`) which requires a full harness to exercise.
+Do not add tests for it unless you are building that harness.
 
-- Version lives in `package.json` only
-- CI (`check-version.yml`) blocks merging if the version tag already exists on remote
-- Bump the version in `package.json` before opening a PR that adds features or fixes bugs
-- Publishing is automatic on merge to `main` via `publish.yml`
+### README.md as Config Source of Truth
+
+All user-facing plugin configuration fields are documented in `README.md`. If you add or rename a
+config field in `resolvePluginConfig` in `src/index.ts`, update the README config table too.
 
 ## What NOT to Do
 
-- Do not import from `openclaw/plugin-sdk` in tests — mock the module boundary at `linear-api.js`
-- Do not add new config fields to `resolvePluginConfig` without updating `README.md` config table
-- Do not bypass the `InboxQueue` mutex — all queue ops must go through the class methods
-- Do not add `dist/` build outputs to git — it's gitignored; CI builds from source
+- Do not import from `openclaw/plugin-sdk` in tests — mock at the `linear-api.js` boundary
+- Do not bypass `InboxQueue` methods to write to the queue file directly
+- Do not add `dist/` outputs to git — CI builds from source; `dist/` is gitignored
+- Do not bump the version in `package.json` on a bug-fix-only branch unless the fix is user-facing
+  (CI blocks merging if the tag already exists — an accidental bump blocks the whole branch)
