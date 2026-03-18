@@ -389,10 +389,7 @@ describe('resolveMilestoneId()', () => {
   })
 
   it('throws with (none) when project has no milestones', async () => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch({ data: { project: { projectMilestones: { nodes: [] } } } }),
-    )
+    vi.stubGlobal('fetch', mockFetch({ data: { project: { projectMilestones: { nodes: [] } } } }))
     await expect(resolveMilestoneId('proj-1', 'M1')).rejects.toThrow(
       'Milestone "M1" not found in project. Available milestones: (none)',
     )
