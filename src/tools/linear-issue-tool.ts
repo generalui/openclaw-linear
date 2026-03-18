@@ -324,58 +324,81 @@ async function createIssue(params: Params) {
   return jsonResult(data.issueCreate)
 }
 
-async function resolveUpdateInput(params: Params, id: string): Promise<Record<string, unknown> | { error: string }> {
-  const input: Record<string, unknown> = {}
+async function fetchIssueContext(
+  id: string,
+): Promise<{ teamId: string; description: string | undefined; existingProjectId: string | undefined }> {
+  const issueData = await graphql<{
+    issue: { team: { id: string }; description?: string; project?: { id: string } }
+  }>(
+    `
+      query ($id: String!) {
+        issue(id: $id) {
+          team { id }
+          description
+          project { id }
+        }
+      }
+    `,
+    { id },
+  )
+  return {
+    teamId: issueData.issue.team.id,
+    description: issueData.issue.description,
+    existingProjectId: issueData.issue.project?.id,
+  }
+}
 
-  // Fetch team ID (for state/label resolution), current description (for append),
-  // and current project ID (for milestone resolution when project not explicitly provided)
+function buildScalarFields(params: Params, appendedDescription?: string): Record<string, unknown> {
+  const fields: Record<string, unknown> = {}
+  if (appendedDescription !== undefined) {
+    fields.description = appendedDescription
+  } else if (params.description !== undefined && !params.appendDescription) {
+    fields.description = params.description
+  }
+  if (params.title) fields.title = params.title
+  if (params.priority !== undefined) fields.priority = params.priority
+  if (params.dueDate !== undefined) fields.dueDate = params.dueDate || null
+  return fields
+}
+
+async function buildResolvedFields(
+  params: Params,
+  teamId: string | undefined,
+  existingProjectId: string | undefined,
+): Promise<Record<string, unknown> | { error: string }> {
+  const fields: Record<string, unknown> = {}
+  if (params.state) fields.stateId = await resolveStateId(teamId!, params.state)
+  if (params.assignee) fields.assigneeId = await resolveUserId(params.assignee)
+  if (params.project) fields.projectId = await resolveProjectId(params.project)
+  if (params.labels?.length) fields.labelIds = await resolveLabelIds(teamId!, params.labels)
+  if (params.milestone) {
+    const projectId = (fields.projectId as string | undefined) ?? existingProjectId
+    if (!projectId) return { error: 'milestone requires the issue to be associated with a project' }
+    fields.projectMilestoneId = await resolveMilestoneId(projectId, params.milestone)
+  }
+  return fields
+}
+
+async function resolveUpdateInput(params: Params, id: string): Promise<Record<string, unknown> | { error: string }> {
+  const needsContext = params.state ?? params.labels?.length ?? params.appendDescription ?? params.milestone
   let teamId: string | undefined
   let existingProjectId: string | undefined
-  if (params.state ?? params.labels?.length ?? params.appendDescription ?? params.milestone) {
-    const issueData = await graphql<{
-      issue: { team: { id: string }; description?: string; project?: { id: string } }
-    }>(
-      `
-        query ($id: String!) {
-          issue(id: $id) {
-            team {
-              id
-            }
-            description
-            project {
-              id
-            }
-          }
-        }
-      `,
-      { id },
-    )
-    teamId = issueData.issue.team.id
-    existingProjectId = issueData.issue.project?.id
+  let appendedDescription: string | undefined
 
+  if (needsContext) {
+    const ctx = await fetchIssueContext(id)
+    teamId = ctx.teamId
+    existingProjectId = ctx.existingProjectId
     if (params.appendDescription && params.description !== undefined) {
-      const existing = issueData.issue.description ?? ''
-      input.description = existing ? `${existing}\n\n${params.description}` : params.description
+      const existing = ctx.description ?? ''
+      appendedDescription = existing ? `${existing}\n\n${params.description}` : params.description
     }
   }
 
-  if (params.title) input.title = params.title
-  if (params.description !== undefined && !params.appendDescription) input.description = params.description
-  if (params.priority !== undefined) input.priority = params.priority
-  if (params.state) input.stateId = await resolveStateId(teamId!, params.state)
-  if (params.assignee) input.assigneeId = await resolveUserId(params.assignee)
-  if (params.project) input.projectId = await resolveProjectId(params.project)
-  if (params.labels?.length) input.labelIds = await resolveLabelIds(teamId!, params.labels)
-  if (params.dueDate !== undefined) input.dueDate = params.dueDate || null
-  if (params.milestone) {
-    const projectId = (input.projectId as string | undefined) ?? existingProjectId
-    if (!projectId) {
-      return { error: 'milestone requires the issue to be associated with a project' }
-    }
-    input.projectMilestoneId = await resolveMilestoneId(projectId, params.milestone)
-  }
+  const resolvedFields = await buildResolvedFields(params, teamId, existingProjectId)
+  if ('error' in resolvedFields) return resolvedFields
 
-  return input
+  return { ...buildScalarFields(params, appendedDescription), ...resolvedFields }
 }
 
 async function updateIssue(params: Params) {
