@@ -145,6 +145,14 @@ async function viewProject(params: Params) {
               name
             }
           }
+          projectMilestones {
+            nodes {
+              id
+              name
+              targetDate
+              description
+            }
+          }
         }
       }
     `,

@@ -220,3 +220,32 @@ export async function resolveProjectId(name: string): Promise<string> {
   }
   return data.projects.nodes[0].id
 }
+
+export async function resolveMilestoneId(projectId: string, name: string): Promise<string> {
+  const data = await graphql<{
+    project: { projectMilestones: { nodes: { id: string; name: string }[] } }
+  }>(
+    `
+      query ($projectId: String!) {
+        project(id: $projectId) {
+          projectMilestones {
+            nodes {
+              id
+              name
+            }
+          }
+        }
+      }
+    `,
+    { projectId },
+  )
+
+  const lowerName = name.toLowerCase()
+  const match = data.project.projectMilestones.nodes.find((m) => m.name.toLowerCase() === lowerName)
+
+  if (!match) {
+    const available = data.project.projectMilestones.nodes.map((m) => m.name).join(', ')
+    throw new Error(`Milestone "${name}" not found in project. Available milestones: ${available || '(none)'}`)
+  }
+  return match.id
+}

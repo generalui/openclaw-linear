@@ -18,6 +18,7 @@ import {
   resolveUserId,
   resolveLabelIds,
   resolveProjectId,
+  resolveMilestoneId,
 } from '../src/linear-api.js'
 
 // ---------------------------------------------------------------------------
@@ -347,5 +348,61 @@ describe('resolveProjectId()', () => {
   it('throws when project not found', async () => {
     vi.stubGlobal('fetch', mockFetch({ data: { projects: { nodes: [] } } }))
     await expect(resolveProjectId('Ghost Project')).rejects.toThrow('Project "Ghost Project" not found')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveMilestoneId()
+// ---------------------------------------------------------------------------
+
+describe('resolveMilestoneId()', () => {
+  const milestoneData = {
+    data: {
+      project: {
+        projectMilestones: {
+          nodes: [
+            { id: 'ms-alpha', name: 'Alpha Release' },
+            { id: 'ms-beta', name: 'Beta Release' },
+          ],
+        },
+      },
+    },
+  }
+
+  it('returns milestone UUID for a matching name', async () => {
+    vi.stubGlobal('fetch', mockFetch(milestoneData))
+    const id = await resolveMilestoneId('proj-1', 'Alpha Release')
+    expect(id).toBe('ms-alpha')
+  })
+
+  it('matches milestone names case-insensitively', async () => {
+    vi.stubGlobal('fetch', mockFetch(milestoneData))
+    const id = await resolveMilestoneId('proj-1', 'beta release')
+    expect(id).toBe('ms-beta')
+  })
+
+  it('throws when milestone not found, listing available options', async () => {
+    vi.stubGlobal('fetch', mockFetch(milestoneData))
+    await expect(resolveMilestoneId('proj-1', 'Gamma')).rejects.toThrow(
+      'Milestone "Gamma" not found in project. Available milestones: Alpha Release, Beta Release',
+    )
+  })
+
+  it('throws with (none) when project has no milestones', async () => {
+    vi.stubGlobal('fetch', mockFetch({ data: { project: { projectMilestones: { nodes: [] } } } }))
+    await expect(resolveMilestoneId('proj-1', 'M1')).rejects.toThrow(
+      'Milestone "M1" not found in project. Available milestones: (none)',
+    )
+  })
+
+  it('passes projectId as a variable to the query', async () => {
+    const mockFn = mockFetch(milestoneData)
+    vi.stubGlobal('fetch', mockFn)
+    await resolveMilestoneId('proj-abc', 'Alpha Release')
+
+    const body = JSON.parse(mockFn.mock.calls[0][1].body as string) as {
+      variables: Record<string, unknown>
+    }
+    expect(body.variables.projectId).toBe('proj-abc')
   })
 })

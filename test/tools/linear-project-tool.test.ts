@@ -82,6 +82,33 @@ describe('linear_project tool', () => {
       expect(data.name).toBe('Alpha')
     })
 
+    it('includes projectMilestones in the view query', async () => {
+      mockedGraphql.mockResolvedValue({
+        project: {
+          id: 'p1',
+          name: 'Alpha',
+          projectMilestones: {
+            nodes: [
+              { id: 'ms-1', name: 'v0.1.0', targetDate: '2026-03-01', description: 'First milestone' },
+              { id: 'ms-2', name: 'v0.2.0', targetDate: '2026-04-01', description: null },
+            ],
+          },
+        },
+      })
+
+      const tool = createProjectTool()
+      const result = await tool.execute('call-1', { action: 'view', projectId: 'p1' })
+      const data = parse(result)
+      expect(data.projectMilestones.nodes).toHaveLength(2)
+      expect(data.projectMilestones.nodes[0].name).toBe('v0.1.0')
+      expect(data.projectMilestones.nodes[1].name).toBe('v0.2.0')
+
+      // Verify the query requests projectMilestones fields
+      const query = mockedGraphql.mock.calls[0][0]
+      expect(query).toContain('projectMilestones')
+      expect(query).toContain('targetDate')
+    })
+
     it('returns error without projectId', async () => {
       const tool = createProjectTool()
       const result = await tool.execute('call-1', { action: 'view' })
