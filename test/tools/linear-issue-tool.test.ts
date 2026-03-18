@@ -8,10 +8,19 @@ vi.mock('../../src/linear-api.js', () => ({
   resolveUserId: vi.fn(),
   resolveLabelIds: vi.fn(),
   resolveProjectId: vi.fn(),
+  resolveMilestoneId: vi.fn(),
 }))
 
-const { graphql, resolveIssueId, resolveTeamId, resolveStateId, resolveUserId, resolveLabelIds, resolveProjectId } =
-  await import('../../src/linear-api.js')
+const {
+  graphql,
+  resolveIssueId,
+  resolveTeamId,
+  resolveStateId,
+  resolveUserId,
+  resolveLabelIds,
+  resolveProjectId,
+  resolveMilestoneId,
+} = await import('../../src/linear-api.js')
 const { createIssueTool } = await import('../../src/tools/linear-issue-tool.js')
 
 const mockedGraphql = vi.mocked(graphql)
@@ -21,6 +30,7 @@ const mockedResolveStateId = vi.mocked(resolveStateId)
 const mockedResolveUserId = vi.mocked(resolveUserId)
 const mockedResolveLabelIds = vi.mocked(resolveLabelIds)
 const mockedResolveProjectId = vi.mocked(resolveProjectId)
+const mockedResolveMilestoneId = vi.mocked(resolveMilestoneId)
 
 function parse(result: { content: { type: string; text?: string }[] }) {
   const text = result.content.find((c) => c.type === 'text')?.text
@@ -204,6 +214,51 @@ describe('linear_issue tool', () => {
       )
       expect(data.error).toContain('No teams found')
     })
+
+    it('resolves milestone and passes projectMilestoneId when milestone and project provided', async () => {
+      mockedResolveTeamId.mockResolvedValue('team-uuid')
+      mockedResolveProjectId.mockResolvedValue('proj-uuid')
+      mockedResolveMilestoneId.mockResolvedValue('milestone-uuid')
+      mockedGraphql.mockResolvedValue({
+        issueCreate: {
+          success: true,
+          issue: { id: 'new', identifier: 'ENG-101', url: 'u', title: 'Milestoned' },
+        },
+      })
+
+      await createIssueTool().execute('call-1', {
+        action: 'create',
+        title: 'Milestoned',
+        team: 'ENG',
+        project: 'Alpha',
+        milestone: 'RL3 v0.2.0',
+      })
+
+      expect(mockedResolveProjectId).toHaveBeenCalledWith('Alpha')
+      expect(mockedResolveMilestoneId).toHaveBeenCalledWith('proj-uuid', 'RL3 v0.2.0')
+      const input = getMutationInput()
+      expect(input.projectMilestoneId).toBe('milestone-uuid')
+    })
+
+    it('returns error when milestone provided without project', async () => {
+      mockedResolveTeamId.mockResolvedValue('team-uuid')
+      mockedGraphql.mockResolvedValue({
+        issueCreate: {
+          success: true,
+          issue: { id: 'new', identifier: 'ENG-102', url: 'u', title: 'T' },
+        },
+      })
+
+      const data = parse(
+        await createIssueTool().execute('call-1', {
+          action: 'create',
+          title: 'No project',
+          team: 'ENG',
+          milestone: 'M1',
+        }),
+      )
+      expect(data.error).toContain('milestone requires project')
+    })
   })
 
   describe('update', () => {
@@ -315,6 +370,74 @@ describe('linear_issue tool', () => {
         }),
       )
       expect(data.error).toContain('issueId is required')
+    })
+
+    it('resolves milestone using existing project when no project param provided', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedResolveMilestoneId.mockResolvedValue('ms-uuid')
+      mockedGraphql
+        .mockResolvedValueOnce({
+          issue: { team: { id: 'team-1' }, description: null, project: { id: 'existing-proj' } },
+        })
+        .mockResolvedValueOnce({
+          issueUpdate: {
+            success: true,
+            issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'T' },
+          },
+        })
+
+      await createIssueTool().execute('call-1', {
+        action: 'update',
+        issueId: 'ENG-42',
+        milestone: 'Sprint 1',
+      })
+
+      expect(mockedResolveMilestoneId).toHaveBeenCalledWith('existing-proj', 'Sprint 1')
+      const vars = mockedGraphql.mock.calls[1][1] as { input: Record<string, unknown> }
+      expect(vars.input.projectMilestoneId).toBe('ms-uuid')
+    })
+
+    it('resolves milestone using provided project param when both are given', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedResolveProjectId.mockResolvedValue('new-proj-uuid')
+      mockedResolveMilestoneId.mockResolvedValue('ms-uuid-2')
+      mockedGraphql
+        .mockResolvedValueOnce({
+          issue: { team: { id: 'team-1' }, description: null, project: { id: 'old-proj' } },
+        })
+        .mockResolvedValueOnce({
+          issueUpdate: {
+            success: true,
+            issue: { id: 'uuid-1', identifier: 'ENG-42', title: 'T' },
+          },
+        })
+
+      await createIssueTool().execute('call-1', {
+        action: 'update',
+        issueId: 'ENG-42',
+        project: 'NewProject',
+        milestone: 'M2',
+      })
+
+      expect(mockedResolveMilestoneId).toHaveBeenCalledWith('new-proj-uuid', 'M2')
+      const vars = mockedGraphql.mock.calls[1][1] as { input: Record<string, unknown> }
+      expect(vars.input.projectMilestoneId).toBe('ms-uuid-2')
+    })
+
+    it('returns error when milestone set but issue has no project and no project param', async () => {
+      mockedResolveIssueId.mockResolvedValue('uuid-1')
+      mockedGraphql.mockResolvedValueOnce({
+        issue: { team: { id: 'team-1' }, description: null, project: null },
+      })
+
+      const data = parse(
+        await createIssueTool().execute('call-1', {
+          action: 'update',
+          issueId: 'ENG-42',
+          milestone: 'M1',
+        }),
+      )
+      expect(data.error).toContain('milestone requires')
     })
   })
 

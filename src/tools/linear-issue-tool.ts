@@ -8,6 +8,7 @@ import {
   resolveUserId,
   resolveLabelIds,
   resolveProjectId,
+  resolveMilestoneId,
 } from '../linear-api.js'
 
 const Params = Type.Object({
@@ -58,6 +59,12 @@ const Params = Type.Object({
   dueDate: Type.Optional(
     Type.String({
       description: 'Due date in YYYY-MM-DD format (e.g. 2025-12-31). Pass null or empty string to clear.',
+    }),
+  ),
+  milestone: Type.Optional(
+    Type.String({
+      description:
+        'Project milestone name to associate the issue with. Requires the issue to be part of a project. Used with create and update.',
     }),
   ),
   limit: Type.Optional(
@@ -139,6 +146,10 @@ async function viewIssue(params: Params) {
             key
           }
           project {
+            id
+            name
+          }
+          projectMilestone {
             id
             name
           }
@@ -281,6 +292,12 @@ async function createIssue(params: Params) {
     input.labelIds = await resolveLabelIds(input.teamId as string, params.labels)
   }
   if (params.dueDate !== undefined) input.dueDate = params.dueDate || null
+  if (params.milestone) {
+    if (!input.projectId) {
+      return jsonResult({ error: 'milestone requires project to be set' })
+    }
+    input.projectMilestoneId = await resolveMilestoneId(input.projectId as string, params.milestone)
+  }
 
   const data = await graphql<{
     issueCreate: {
@@ -307,14 +324,16 @@ async function createIssue(params: Params) {
   return jsonResult(data.issueCreate)
 }
 
-async function resolveUpdateInput(params: Params, id: string): Promise<Record<string, unknown>> {
+async function resolveUpdateInput(params: Params, id: string): Promise<Record<string, unknown> | { error: string }> {
   const input: Record<string, unknown> = {}
 
-  // Fetch team ID (for state/label resolution) and current description (for append)
+  // Fetch team ID (for state/label resolution), current description (for append),
+  // and current project ID (for milestone resolution when project not explicitly provided)
   let teamId: string | undefined
-  if (params.state ?? params.labels?.length ?? params.appendDescription) {
+  let existingProjectId: string | undefined
+  if (params.state ?? params.labels?.length ?? params.appendDescription ?? params.milestone) {
     const issueData = await graphql<{
-      issue: { team: { id: string }; description?: string }
+      issue: { team: { id: string }; description?: string; project?: { id: string } }
     }>(
       `
         query ($id: String!) {
@@ -323,12 +342,16 @@ async function resolveUpdateInput(params: Params, id: string): Promise<Record<st
               id
             }
             description
+            project {
+              id
+            }
           }
         }
       `,
       { id },
     )
     teamId = issueData.issue.team.id
+    existingProjectId = issueData.issue.project?.id
 
     if (params.appendDescription && params.description !== undefined) {
       const existing = issueData.issue.description ?? ''
@@ -344,6 +367,13 @@ async function resolveUpdateInput(params: Params, id: string): Promise<Record<st
   if (params.project) input.projectId = await resolveProjectId(params.project)
   if (params.labels?.length) input.labelIds = await resolveLabelIds(teamId!, params.labels)
   if (params.dueDate !== undefined) input.dueDate = params.dueDate || null
+  if (params.milestone) {
+    const projectId = (input.projectId as string | undefined) ?? existingProjectId
+    if (!projectId) {
+      return { error: 'milestone requires the issue to be associated with a project' }
+    }
+    input.projectMilestoneId = await resolveMilestoneId(projectId, params.milestone)
+  }
 
   return input
 }
@@ -355,6 +385,9 @@ async function updateIssue(params: Params) {
 
   const id = await resolveIssueId(params.issueId)
   const input = await resolveUpdateInput(params, id)
+  if ('error' in input) {
+    return jsonResult(input)
+  }
 
   const data = await graphql<{
     issueUpdate: {
