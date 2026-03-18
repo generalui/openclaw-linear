@@ -1,6 +1,9 @@
 node_modules
 dist
+dist.bak
 coverage
+genui-oc-linear-build
+queue
 **/*.md
 **/*.yml
 **/*.yaml

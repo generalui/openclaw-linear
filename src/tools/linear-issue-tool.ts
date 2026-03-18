@@ -333,9 +333,13 @@ async function fetchIssueContext(
     `
       query ($id: String!) {
         issue(id: $id) {
-          team { id }
+          team {
+            id
+          }
           description
-          project { id }
+          project {
+            id
+          }
         }
       }
     `,
